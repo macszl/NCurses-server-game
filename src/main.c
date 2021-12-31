@@ -64,7 +64,7 @@ struct entity_ncurses_attributes_t
 struct entity_ncurses_attributes_t attribute_list[] =
         {
                 {.entity = ENTITY_FREE, .ch = ' '},
-                {.entity = ENTITY_WALL, .ch = 'O'},
+                {.entity = ENTITY_WALL, .ch = 'O', .color_p = 2},
                 {.entity = ENTITY_BUSH, .ch = '$'},
                 {.entity = ENTITY_CAMPSITE, .ch = '*'},
                 {.entity = ENTITY_PLAYER_1, .ch = '1'},
@@ -106,10 +106,10 @@ int main() {
 
     //initializing colors for our database
     init_pair(1, COLOR_YELLOW, COLOR_BLACK);
-
+    init_pair(2, COLOR_WHITE, COLOR_BLACK);
     for(int i = 0; i < 13; i++)
     {
-        if( attribute_list[i].color_p != 1)
+        if( !(attribute_list[i].color_p == 1 || attribute_list[i].color_p == 2) )
         {
             continue;
         }
