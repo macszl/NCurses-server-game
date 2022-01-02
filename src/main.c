@@ -36,6 +36,13 @@ typedef enum entity_t
     ENTITY_COIN_DROPPED ,
 } entity_t;
 
+typedef enum spawner_type
+{
+    NO_SPAWNER = 0,
+    COIN_SPAWNER ,
+    BEAST_SPAWNER
+} spawner_type;
+
 typedef struct point_t
 {
     unsigned int x;
@@ -46,6 +53,7 @@ typedef struct map_point_t
 {
     point_t point;
     entity_t entity_type;
+    spawner_type spawnerType;
 } map_point_t;
 
 typedef struct beast_t
@@ -63,15 +71,15 @@ struct entity_ncurses_attributes_t
 //database storing the ncurses colors for each entity type
 struct entity_ncurses_attributes_t attribute_list[] =
         {
-                {.entity = ENTITY_FREE, .ch = ' '},
+                {.entity = ENTITY_FREE, .ch = '.', .color_p = 5},
                 {.entity = ENTITY_WALL, .ch = 'O', .color_p = 2},
-                {.entity = ENTITY_BUSH, .ch = '$'},
-                {.entity = ENTITY_CAMPSITE, .ch = '*'},
-                {.entity = ENTITY_PLAYER_1, .ch = '1'},
-                {.entity = ENTITY_PLAYER_2, .ch = '2'},
-                {.entity = ENTITY_PLAYER_3, .ch = '3'},
-                {.entity = ENTITY_PLAYER_4, .ch = '4'},
-                {.entity = ENTITY_BEAST, .ch = '@'},
+                {.entity = ENTITY_BUSH, .ch = '$', .color_p = 5},
+                {.entity = ENTITY_CAMPSITE, .ch = '*', .color_p = 4},
+                {.entity = ENTITY_PLAYER_1, .ch = '1', .color_p = 3},
+                {.entity = ENTITY_PLAYER_2, .ch = '2', .color_p = 3},
+                {.entity = ENTITY_PLAYER_3, .ch = '3', .color_p = 3},
+                {.entity = ENTITY_PLAYER_4, .ch = '4', .color_p = 3},
+                {.entity = ENTITY_BEAST, .ch = '@', .color_p = 6},
                 {.entity = ENTITY_COIN_SMALL, .ch = 'c', .color_p = 1},
                 {.entity = ENTITY_COIN_BIG, .ch = 'C' , .color_p = 1},
                 {.entity = ENTITY_COIN_TREASURE, .ch ='T', .color_p = 1},
@@ -104,9 +112,14 @@ int main() {
     wrefresh(window);
     keypad(stdscr, true);
 
-    //initializing colors for our database
+    //initializing colors for our database of tiles
+    //NUM, BACKGROUND COLOR, LETTER COLOR
     init_pair(1, COLOR_YELLOW, COLOR_BLACK);
     init_pair(2, COLOR_WHITE, COLOR_BLACK);
+    init_pair(3, COLOR_MAGENTA, COLOR_BLACK);
+    init_pair(4, COLOR_RED, COLOR_YELLOW);
+    init_pair(5, COLOR_BLACK, COLOR_WHITE);
+    init_pair(6, COLOR_BLACK, COLOR_RED);
     for(int i = 0; i < 13; i++)
     {
         if( !(attribute_list[i].color_p == 1 || attribute_list[i].color_p == 2) )
