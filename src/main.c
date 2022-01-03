@@ -16,8 +16,8 @@
 #define DEBUG 0
 
 //TODO these 2 parameters will be transferred to the players for error checking
-const int MAP_LENGTH = 3;
-const int MAP_WIDTH = 3;
+const int MAP_LENGTH = 32;
+const int MAP_WIDTH = 32;
 
 typedef enum entity_t
 {
@@ -93,15 +93,16 @@ void spawn_beast();
 void spawn_coin( int x, int y, entity_t coin_size, map_point_t map[]);
 void beast_move(beast_t * beast_ptr, beast_t new_beast_loc);
 int main() {
-
-    int test = (int) ENTITY_FREE;
-    printf("%d", test);
     map_point_t map[MAP_LENGTH * MAP_WIDTH];
     //TODO pre-game intialization menus
 
     //TODO map will be initialized from an existing file
 
-    map_init(map);
+    int err = map_init(map);
+    if(err != 0)
+    {
+        return 1;
+    }
     //required ncurses initialization functions
     initscr();
     noecho();
@@ -122,10 +123,6 @@ int main() {
     init_pair(6, COLOR_BLACK, COLOR_RED);
     for(int i = 0; i < 13; i++)
     {
-        if( !(attribute_list[i].color_p == 1 || attribute_list[i].color_p == 2) )
-        {
-            continue;
-        }
         int col = attribute_list[i].color_p;
         attribute_list[i].ch = attribute_list[i].ch | A_REVERSE | COLOR_PAIR(col);
     }
@@ -233,27 +230,36 @@ void spawn_beast()
 {
     //TODO this function spawns a beast on a new thread
 }
-int map_init(map_point_t map[])
-{
+int map_init(map_point_t map[]) {
     //initializes the map array with a simple 3x3 map
     //may load a bigger one from the file later on
 
-    for(int i = 0; i < MAP_WIDTH; i++)
+//    for(int i = 0; i < MAP_WIDTH; i++)
+//    {
+//        for(int j = 0; j < MAP_LENGTH; j++)
+//        {
+//            map[i * MAP_WIDTH + j].point.y = (unsigned int ) i;
+//            map[i * MAP_WIDTH + j].point.x = (unsigned int ) j;
+//            map[i * MAP_WIDTH + j].entity_type = ENTITY_WALL;
+//        }
+//    }
+//
+//    map[3+1].entity_type = ENTITY_FREE;
+    FILE *fptr = fopen("map.bin", "rb");
+    if (!fptr)
     {
-        for(int j = 0; j < MAP_LENGTH; j++)
-        {
-            map[i * MAP_WIDTH + j].point.y = (unsigned int ) i;
-            map[i * MAP_WIDTH + j].point.x = (unsigned int ) j;
-            map[i * MAP_WIDTH + j].entity_type = ENTITY_WALL;
-        }
+        return -1;
     }
 
-    map[3+1].entity_type = ENTITY_FREE;
+    for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
+    {
+        fread(&map[i], sizeof(map_point_t), 1, fptr);
+    }
+    fclose(fptr);
     return 0;
 }
 int render_map(map_point_t map[], WINDOW * window)
 {
-    //TODO ncurses connected function that refreshes the window
     for(int i = 0; i < MAP_WIDTH; i++)
     {
         for(int j = 0; j < MAP_LENGTH; j++)
