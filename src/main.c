@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <ncurses.h>
 #include <string.h>
+#include "map.h"
 
 //TODO: CELE PROJEKTOWE:
 // serwer powinnien odpowiadać za:
@@ -16,46 +17,19 @@
 
 #define DEBUG 0
 
+#define swap(x,y) do \
+   { unsigned char swap_temp[sizeof(x) == sizeof(y) ? (signed)sizeof(x) : -1]; \
+     memcpy(swap_temp,&y,sizeof(x)); \
+     memcpy(&y,&x,       sizeof(x)); \
+     memcpy(&x,swap_temp,sizeof(x)); \
+    } while(0)
+
 //TODO these 2 parameters will be transferred to the players for error checking
-const int MAP_LENGTH = 32;
-const int MAP_WIDTH = 32;
 
-typedef enum entity_t
-{
-    ENTITY_FREE = 0,
-    ENTITY_WALL ,
-    ENTITY_BUSH ,
-    ENTITY_CAMPSITE ,
-    ENTITY_PLAYER_1 ,
-    ENTITY_PLAYER_2 ,
-    ENTITY_PLAYER_3 ,
-    ENTITY_PLAYER_4 ,
-    ENTITY_BEAST ,
-    ENTITY_COIN_SMALL ,
-    ENTITY_COIN_BIG ,
-    ENTITY_COIN_TREASURE ,
-    ENTITY_COIN_DROPPED ,
-} entity_t;
+//2 parameters defined in the map.h header file
+extern int MAP_LENGTH;
+extern int MAP_WIDTH;
 
-typedef enum spawner_type
-{
-    NO_SPAWNER = 0,
-    COIN_SPAWNER ,
-    BEAST_SPAWNER
-} spawner_type;
-
-typedef struct point_t
-{
-    unsigned int x;
-    unsigned int y;
-} point_t;
-
-typedef struct map_point_t
-{
-    point_t point;
-    entity_t entity_type;
-    spawner_type spawnerType;
-} map_point_t;
 
 typedef struct beast_t
 {
@@ -75,6 +49,7 @@ typedef struct coin_spawn_manager_t
     int free_spawners;
     int total_spawners;
 } coin_spawn_manager_t;
+
 //database storing the ncurses colors for each entity type
 struct entity_ncurses_attributes_t attribute_list[] =
         {
@@ -95,7 +70,7 @@ struct entity_ncurses_attributes_t attribute_list[] =
 
 coin_spawn_manager_t coinSpawnManager;
 
-int map_init(map_point_t map[]);
+
 int render_map(map_point_t map[], WINDOW * window);
 void add_new_entity(entity_t, map_point_t map[]);
 void spawn_beast();
@@ -104,13 +79,21 @@ void beast_move(beast_t * beast_ptr, beast_t new_beast_loc);
 int coin_spawn_init(map_point_t map[]);
 
 int coin_spawn_occ(map_point_t occupied_point);
-int  coin_spawn_free(map_point_t freed_point);
+int coin_spawn_free(map_point_t freed_point);
+int coin_spawn_search_for_element_internal(map_point_t element);
+
 int main() {
     srand(time(NULL));
     map_point_t map[MAP_LENGTH * MAP_WIDTH];
     //TODO pre-game intialization menus
 
     int err = map_init(map);
+    if(err != 0)
+    {
+        return 1;
+    }
+
+    err = coin_spawn_init(map);
     if(err != 0)
     {
         return 1;
@@ -230,59 +213,48 @@ int coin_spawn_init(map_point_t map[])
 }
 
 //TODO Refactor this kludge into something prettier
+
+//returns the position of a map_point_t element, returns -1 if not found
+int coin_spawn_search_for_element_internal(map_point_t element)
+{
+    map_point_t * arr = coinSpawnManager.spawner_array;
+    int i = 0;
+    for(;i < coinSpawnManager.total_spawners; i++)
+    {
+        if( element.point.x == arr->point.x  && element.point.y == arr->point.y)
+        {
+            break;
+        }
+    }
+    if(i == coinSpawnManager.total_spawners)
+        return -1;
+    else
+        return i;
+}
 int coin_spawn_occ(map_point_t occupied_point)
 {
     if(coinSpawnManager.free_spawners == 0)
-    {
         return -1;
-    }
+
     //znajdowanie elementu
-    map_point_t * arr = coinSpawnManager.spawner_array;
-    int pos;
-    for(int i = 0; i < coinSpawnManager.total_spawners; i++)
-    {
-        if( occupied_point.point.x == arr[i].point.x  && occupied_point.point.y == arr[i].point.y)
-        {
-            pos = i;
-        }
-    }
+    int pos = coin_spawn_search_for_element_internal(occupied_point);
 
     //swap znalezionego elemetu z ostatnim wolnym elementem
     int last_free_pos = coinSpawnManager.free_spawners - 1;
-    map_point_t temp;
-
-    memcpy(&temp, &coinSpawnManager.spawner_array[last_free_pos], sizeof(map_point_t));
-
-    memcpy(&coinSpawnManager.spawner_array[last_free_pos], &coinSpawnManager.spawner_array[pos], sizeof(map_point_t));
-
-    memcpy(&coinSpawnManager.spawner_array[pos], &temp, sizeof(map_point_t));
+    swap(coinSpawnManager.spawner_array[last_free_pos], coinSpawnManager.spawner_array[pos] );
     return 0;
 }
 int coin_spawn_free(map_point_t freed_point)
 {
     if(coinSpawnManager.free_spawners == coinSpawnManager.total_spawners)
-    {
         return -1;
-    }
+
     //znajdowanie elementu
-    map_point_t * arr = coinSpawnManager.spawner_array;
-    int pos;
-    for(int i = 0; i < coinSpawnManager.total_spawners; i++)
-    {
-        if( freed_point.point.x == arr->point.x  && freed_point.point.y == arr->point.y)
-        {
-            pos = i;
-        }
-    }
+    int pos = coin_spawn_search_for_element_internal(freed_point);
 
     //swap znalezionego elemetu z ostatnim zajetym elementem
     int last_occ_pos = coinSpawnManager.free_spawners;
-    map_point_t temp;
-    memcpy(&temp, &coinSpawnManager.spawner_array[last_occ_pos], sizeof(map_point_t));
-
-    memcpy(&coinSpawnManager.spawner_array[last_occ_pos], &coinSpawnManager.spawner_array[pos], sizeof(map_point_t));
-
-    memcpy(&coinSpawnManager.spawner_array[pos], &temp, sizeof(map_point_t));
+    swap(coinSpawnManager.spawner_array[last_occ_pos], coinSpawnManager.spawner_array[pos]);
     return 0;
 }
 void spawn_coin(entity_t coin_size, map_point_t map[])
@@ -335,38 +307,7 @@ void spawn_beast()
 {
     //TODO this function spawns a beast on a new thread
 }
-int map_init(map_point_t map[]) {
-
-    //3x3 test map initialization
-//    for(int i = 0; i < MAP_WIDTH; i++)
-//    {
-//        for(int j = 0; j < MAP_LENGTH; j++)
-//        {
-//            map[i * MAP_WIDTH + j].point.y = (unsigned int ) i;
-//            map[i * MAP_WIDTH + j].point.x = (unsigned int ) j;
-//            map[i * MAP_WIDTH + j].entity_type = ENTITY_WALL;
-//        }
-//    }
-//
-//    map[3+1].entity_type = ENTITY_FREE;
-
-    //larger map - initialization from a file
-    FILE *fptr = fopen("map.bin", "rb");
-    if (!fptr)
-    {
-        return -1;
-    }
-
-    for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
-    {
-        fread(&map[i], sizeof(map_point_t), 1, fptr);
-    }
-    fclose(fptr);
-
-    int err = coin_spawn_init(map);
-    if( err) return err;
-    return 0;
-}
+//map updating function using ncurses
 int render_map(map_point_t map[], WINDOW * window)
 {
     for(int i = 0; i < MAP_WIDTH; i++)

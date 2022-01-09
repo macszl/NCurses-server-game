@@ -19,13 +19,15 @@ $(SRC):
 	mkdir -p $(SRC)
 
 # Dynamic linking with ncurses
-server: $(OBJ)/main.o
+server: $(OBJ)/main.o $(OBJ)/map.o
 	$(CC) $(DEBUG) $(CCFLAGS) $^ -o $@ -lncurses
 
 # .O files with debugging symbols
 $(OBJ)/main.o: $(SRC)/main.c
 	$(CC) $(DEBUG) $(NOLINK) $(CCFLAGS) $< -o $@
 
+$(OBJ)/map.o: $(SRC)/map.c $(SRC)/map.h
+	$(CC) $(DEBUG) $(NOLINK) $(CCFLAGS) $< -o $@
 .PHONY: clean
 
 clean:
