@@ -1,12 +1,19 @@
 #include <stdlib.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <stdbool.h>
 #include <ncurses.h>
 #include <string.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <unistd.h>
+
+
 #include "map.h"
 
 //TODO: CELE PROJEKTOWE:
+
 // serwer powinnien odpowiadać za:
 //0. inicjalizacje, załadowanie(bądź generowanie) planszy
 //1. do serwera powinna docierac kazda operacja na mapie poprzez interakcje międzyprocesowe(przesylanie informacji poprzez FIFO)
@@ -16,7 +23,8 @@
 
 
 #define DEBUG 0
-
+#define NO_INPUT 1
+#define MULTITHREADED_INPUT 0
 #define swap(x,y) do \
    { unsigned char swap_temp[sizeof(x) == sizeof(y) ? (signed)sizeof(x) : -1]; \
      memcpy(swap_temp,&y,sizeof(x)); \
@@ -29,19 +37,12 @@
 //2 parameters defined in the map.h header file
 extern int MAP_LENGTH;
 extern int MAP_WIDTH;
-
+extern struct entity_ncurses_attributes_t attribute_list[];
 
 typedef struct beast_t
 {
     point_t curr_place;
 } beast_t;
-
-struct entity_ncurses_attributes_t
-{
-    entity_t entity;
-    chtype ch;
-    int color_p; // which color pair is assigned to the given entity
-};
 
 typedef struct coin_spawn_manager_t
 {
@@ -51,29 +52,8 @@ typedef struct coin_spawn_manager_t
 } coin_spawn_manager_t;
 
 //database storing the ncurses colors for each entity type
-struct entity_ncurses_attributes_t attribute_list[] =
-        {
-                {.entity = ENTITY_FREE, .ch = '.', .color_p = 5},
-                {.entity = ENTITY_WALL, .ch = 'O', .color_p = 2},
-                {.entity = ENTITY_BUSH, .ch = '$', .color_p = 5},
-                {.entity = ENTITY_CAMPSITE, .ch = '*', .color_p = 4},
-                {.entity = ENTITY_PLAYER_1, .ch = '1', .color_p = 3},
-                {.entity = ENTITY_PLAYER_2, .ch = '2', .color_p = 3},
-                {.entity = ENTITY_PLAYER_3, .ch = '3', .color_p = 3},
-                {.entity = ENTITY_PLAYER_4, .ch = '4', .color_p = 3},
-                {.entity = ENTITY_BEAST, .ch = '@', .color_p = 6},
-                {.entity = ENTITY_COIN_SMALL, .ch = 'c', .color_p = 1},
-                {.entity = ENTITY_COIN_BIG, .ch = 'C' , .color_p = 1},
-                {.entity = ENTITY_COIN_TREASURE, .ch ='T', .color_p = 1},
-                {.entity = ENTITY_COIN_DROPPED, .ch = 'D', .color_p = 1}
-        };
 
-coin_spawn_manager_t coinSpawnManager;
 
-void ncurses_funcs_init();
-void attribute_list_init();
-int render_map(map_point_t map[], WINDOW * window);
-void add_new_entity(entity_t, map_point_t map[]);
 void spawn_beast();
 void spawn_coin(entity_t coin_size, map_point_t map[]);
 void beast_move(beast_t * beast_ptr, beast_t new_beast_loc);
@@ -82,6 +62,19 @@ int coin_spawn_init(map_point_t map[]);
 int coin_spawn_occ(map_point_t occupied_point);
 int coin_spawn_free(map_point_t freed_point);
 int coin_spawn_search_for_element_internal(map_point_t element);
+
+
+void *input_routine(void *input_storage);
+void handle_event(int c, map_point_t map[]);
+
+coin_spawn_manager_t coinSpawnManager;
+
+#if MULTITHREADED_INPUT
+pthread_mutex_t mutex_input = PTHREAD_MUTEX_INITIALIZER;
+sem_t input_found_blockade;
+#endif
+
+bool user_did_not_quit = true;
 
 int main() {
     srand(time(NULL));
@@ -107,62 +100,129 @@ int main() {
     //assigning background color and letter color to every entity
     attribute_list_init();
 
-    //TODO main game loop
+    //pthread, sem related stuff
+#if MULTITHREADED_INPUT
+    int input = NO_INPUT;
+    sem_init(&input_found_blockade, 0 ,0);
+    pthread_t thread1;
+    pthread_create(&thread1, NULL, input_routine, &input);
+#endif
+    //MULTITHREADED_INPUT loop
+
+#if MULTITHREADED_INPUT
+    int turn_counter = 0;
+    while(1)
+    {
+        pthread_mutex_lock(&mutex_input);
+        if(input == (int) 'q')
+        {
+            sem_post(&input_found_blockade);
+            break;
+        }
+        if(input != NO_INPUT)
+        {
+            handle_event(input, map);
+            pthread_mutex_unlock(&mutex_input);
+            sem_post(&input_found_blockade);
+            sleep(1);
+            render_map(map, window);
+            wrefresh(window);
+            continue;
+        }
+
+        pthread_mutex_unlock(&mutex_input);
+        turn_counter++;
+    }
+
+    pthread_join(thread1, NULL);
+#endif
+    //singlethreaded mode: made for the ease of debugging
     int i = 0;
-    bool user_did_not_quit = true;
     while (user_did_not_quit)
     {
         render_map(map, window);
         wrefresh(window);
         int c = getch();
-        switch (c) {
-            //arrow key handling: works only with unix distros as unix represents arrow keys as 3 characters
-            case KEY_RIGHT:
-            case KEY_DOWN:
-            case KEY_LEFT:
-            case KEY_UP:
-            {
-                getch();
-                getch();
-            }
-            case 'B':
-            case 'b':
-            {
-                add_new_entity(ENTITY_BEAST, map);
-                break;
-            }
-            case 'c':
-            {
-                add_new_entity(ENTITY_COIN_SMALL, map);
-                break;
-            }
-            case 'C':
-            {
-                add_new_entity(ENTITY_COIN_BIG, map);
-                break;
-            }
-            case 'T':
-            case 't':
-            {
-                add_new_entity(ENTITY_COIN_TREASURE, map);
-                break;
-            }
-            case 'Q':
-            case 'q':
-            {
-                user_did_not_quit = false;
-                break;
-            }
-            default:
-                break;
-        }
+        handle_event(c, map);
         i++;
     }
 
     free(coinSpawnManager.spawner_array);
     endwin();
+#if MULTITHREADED_INPUT
+    pthread_mutex_destroy(&mutex_input);
+    sem_destroy(&input_found_blockade);
+#endif
     return 0;
 }
+
+void handle_event(int c, map_point_t map[])
+{
+    switch (c) {
+        //arrow key handling: works only with unix distros as unix represents arrow keys as 3 characters
+        case KEY_RIGHT:
+        case KEY_DOWN:
+        case KEY_LEFT:
+        case KEY_UP:
+        {
+            getch();
+            getch();
+        }
+        case 'B':
+        case 'b':
+        {
+            add_new_entity(ENTITY_BEAST, map);
+            break;
+        }
+        case 'c':
+        {
+            add_new_entity(ENTITY_COIN_SMALL, map);
+            break;
+        }
+        case 'C':
+        {
+            add_new_entity(ENTITY_COIN_BIG, map);
+            break;
+        }
+        case 'T':
+        case 't':
+        {
+            add_new_entity(ENTITY_COIN_TREASURE, map);
+            break;
+        }
+        case 'Q':
+        case 'q':
+        {
+            user_did_not_quit = false;
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+#if MULTITHREADED_INPUT
+void *input_routine(void *input_storage) {
+    while (1) {
+        pthread_mutex_lock(&mutex_input);
+        *(int *) input_storage = NO_INPUT;
+        char c = (char) getch();
+        flushinp();
+        if( c != NO_INPUT) {
+            *(int *) input_storage = (int) c;
+            pthread_mutex_unlock(&mutex_input);
+            sem_wait(&input_found_blockade);
+            if ( c ==  'q' ) {
+                break;
+            }else {
+                continue;
+            }
+        }
+        pthread_mutex_unlock(&mutex_input);
+    }
+    return NULL;
+}
+#endif
 // Function that initializes the coinManager variable which allows oversight over all the coin spawns over the map
 int coin_spawn_init(map_point_t map[])
 {
@@ -230,6 +290,7 @@ int coin_spawn_occ(map_point_t occupied_point)
 
     //swap znalezionego elemetu z ostatnim wolnym elementem
     int last_free_pos = coinSpawnManager.free_spawners - 1;
+#if DEBUG
     map_point_t test1 = coinSpawnManager.spawner_array[last_free_pos];
     map_point_t test2 = coinSpawnManager.spawner_array[pos];
     if(test1.point.y > 32 || test1.point.y < 0 || test1.point.x > 32 || test1.point.x < 0 ||
@@ -237,6 +298,7 @@ int coin_spawn_occ(map_point_t occupied_point)
     {
         printf( " a");
     }
+#endif
     swap(coinSpawnManager.spawner_array[last_free_pos], coinSpawnManager.spawner_array[pos] );
     coinSpawnManager.free_spawners--;
     return 0;
@@ -253,6 +315,7 @@ int coin_spawn_free(map_point_t freed_point)
 
     //swap znalezionego elemetu z ostatnim zajetym elementem
     int last_occ_pos = coinSpawnManager.free_spawners;
+#if DEBUG
     map_point_t test1 = coinSpawnManager.spawner_array[last_occ_pos];
     map_point_t test2 = coinSpawnManager.spawner_array[pos];
     if(test1.point.y > 32 || test1.point.y < 0 || test1.point.x > 32 || test1.point.x < 0 ||
@@ -260,6 +323,7 @@ int coin_spawn_free(map_point_t freed_point)
     {
         printf( " a");
     }
+#endif
     swap(coinSpawnManager.spawner_array[last_occ_pos], coinSpawnManager.spawner_array[pos]);
     coinSpawnManager.free_spawners++;
     return 0;
@@ -274,10 +338,12 @@ void spawn_coin(entity_t coin_size, map_point_t map[])
     int which_spawner_to_use = rand() % coinSpawnManager.free_spawners;
     int y = (int )coinSpawnManager.spawner_array[which_spawner_to_use].point.y;
     int x = (int) coinSpawnManager.spawner_array[which_spawner_to_use].point.x;
+#if DEBUG
     if(x > 32 || y > 32 || y < 0 || x < 0 )
     {
         printf("a");
     }
+#endif
     map_point_t temp;
     memcpy(&temp, &coinSpawnManager.spawner_array[which_spawner_to_use], sizeof(map_point_t));
     coin_spawn_occ(temp);
@@ -318,37 +384,6 @@ void spawn_beast()
 {
     //TODO this function spawns a beast on a new thread
 }
+
 //map updating function using ncurses
-int render_map(map_point_t map[], WINDOW * window)
-{
-    for(int i = 0; i < MAP_WIDTH; i++)
-    {
-        for(int j = 0; j < MAP_LENGTH; j++)
-        {
-            int ent_index = (int) map[i * MAP_WIDTH + j].entity_type;
-            mvwaddch(window ,i, j, attribute_list[ent_index].ch);
-        }
-    }
-    return 0;
-}
-void attribute_list_init()
-{
-    init_pair(1, COLOR_YELLOW, COLOR_BLACK);
-    init_pair(2, COLOR_WHITE, COLOR_BLACK);
-    init_pair(3, COLOR_MAGENTA, COLOR_BLACK);
-    init_pair(4, COLOR_RED, COLOR_YELLOW);
-    init_pair(5, COLOR_BLACK, COLOR_WHITE);
-    init_pair(6, COLOR_BLACK, COLOR_RED);
-    for(int i = 0; i < 13; i++)
-    {
-        int col = attribute_list[i].color_p;
-        attribute_list[i].ch = attribute_list[i].ch | A_REVERSE | COLOR_PAIR(col);
-    }
-}
-void ncurses_funcs_init()
-{
-    initscr();
-    noecho();
-    start_color();
-    keypad(stdscr, true);
-}
+

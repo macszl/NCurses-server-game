@@ -20,7 +20,7 @@ $(SRC):
 
 # Dynamic linking with ncurses
 server: $(OBJ)/main.o $(OBJ)/map.o
-	$(CC) $(DEBUG) $(CCFLAGS) $^ -o $@ -lncurses
+	$(CC) $(DEBUG) $(CCFLAGS) $^ -o $@ -lncurses -lpthread
 
 # .O files with debugging symbols
 $(OBJ)/main.o: $(SRC)/main.c

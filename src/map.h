@@ -2,6 +2,8 @@
 // Created by maciek on 1/7/22.
 //
 
+#include <ncurses.h>
+
 #ifndef NCURSES_SERVER_GAME_MAP_H
 #define NCURSES_SERVER_GAME_MAP_H
 
@@ -42,5 +44,15 @@ typedef struct map_point_t
     spawner_type spawnerType;
 } map_point_t;
 
+struct entity_ncurses_attributes_t
+{
+    entity_t entity;
+    chtype ch;
+    int color_p; // which color pair is assigned to the given entity
+};
 int map_init(map_point_t map[]);
+void ncurses_funcs_init();
+void attribute_list_init();
+int render_map(map_point_t map[], WINDOW * window);
+void add_new_entity(entity_t, map_point_t map[]);
 #endif //NCURSES_SERVER_GAME_MAP_H
