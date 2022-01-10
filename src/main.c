@@ -70,7 +70,8 @@ struct entity_ncurses_attributes_t attribute_list[] =
 
 coin_spawn_manager_t coinSpawnManager;
 
-
+void ncurses_funcs_init();
+void attribute_list_init();
 int render_map(map_point_t map[], WINDOW * window);
 void add_new_entity(entity_t, map_point_t map[]);
 void spawn_beast();
@@ -89,38 +90,23 @@ int main() {
 
     int err = map_init(map);
     if(err != 0)
-    {
         return 1;
-    }
 
     err = coin_spawn_init(map);
     if(err != 0)
-    {
         return 1;
-    }
+
     //required ncurses initialization functions
-    initscr();
-    noecho();
-    start_color();
+    ncurses_funcs_init();
+
     WINDOW * window = newwin(MAP_WIDTH + 1, MAP_LENGTH + 1,0,0);
     refresh();
     box(window, 0, 0);
     wrefresh(window);
-    keypad(stdscr, true);
 
-    //initializing colors for our database of tiles
-    //NUM, BACKGROUND COLOR, LETTER COLOR
-    init_pair(1, COLOR_YELLOW, COLOR_BLACK);
-    init_pair(2, COLOR_WHITE, COLOR_BLACK);
-    init_pair(3, COLOR_MAGENTA, COLOR_BLACK);
-    init_pair(4, COLOR_RED, COLOR_YELLOW);
-    init_pair(5, COLOR_BLACK, COLOR_WHITE);
-    init_pair(6, COLOR_BLACK, COLOR_RED);
-    for(int i = 0; i < 13; i++)
-    {
-        int col = attribute_list[i].color_p;
-        attribute_list[i].ch = attribute_list[i].ch | A_REVERSE | COLOR_PAIR(col);
-    }
+    //assigning background color and letter color to every entity
+    attribute_list_init();
+
     //TODO main game loop
     int i = 0;
     bool user_did_not_quit = true;
@@ -218,15 +204,16 @@ int coin_spawn_init(map_point_t map[])
 int coin_spawn_search_for_element_internal(map_point_t element)
 {
     map_point_t * arr = coinSpawnManager.spawner_array;
-    int i = 0;
+    int i = 0; bool element_found = false;
     for(;i < coinSpawnManager.total_spawners; i++)
     {
-        if( element.point.x == arr->point.x  && element.point.y == arr->point.y)
+        if( element.point.x == arr[i].point.x  && element.point.y == arr[i].point.y)
         {
+            element_found = true;
             break;
         }
     }
-    if(i == coinSpawnManager.total_spawners)
+    if( !element_found)
         return -1;
     else
         return i;
@@ -238,10 +225,20 @@ int coin_spawn_occ(map_point_t occupied_point)
 
     //znajdowanie elementu
     int pos = coin_spawn_search_for_element_internal(occupied_point);
+    if(pos == -1)
+        return -1;
 
     //swap znalezionego elemetu z ostatnim wolnym elementem
     int last_free_pos = coinSpawnManager.free_spawners - 1;
+    map_point_t test1 = coinSpawnManager.spawner_array[last_free_pos];
+    map_point_t test2 = coinSpawnManager.spawner_array[pos];
+    if(test1.point.y > 32 || test1.point.y < 0 || test1.point.x > 32 || test1.point.x < 0 ||
+            test2.point.y > 32 || test2.point.y < 0 || test2.point.x > 32 || test2.point.x < 0)
+    {
+        printf( " a");
+    }
     swap(coinSpawnManager.spawner_array[last_free_pos], coinSpawnManager.spawner_array[pos] );
+    coinSpawnManager.free_spawners--;
     return 0;
 }
 int coin_spawn_free(map_point_t freed_point)
@@ -251,15 +248,25 @@ int coin_spawn_free(map_point_t freed_point)
 
     //znajdowanie elementu
     int pos = coin_spawn_search_for_element_internal(freed_point);
+    if(pos == -1)
+        return -1;
 
     //swap znalezionego elemetu z ostatnim zajetym elementem
     int last_occ_pos = coinSpawnManager.free_spawners;
+    map_point_t test1 = coinSpawnManager.spawner_array[last_occ_pos];
+    map_point_t test2 = coinSpawnManager.spawner_array[pos];
+    if(test1.point.y > 32 || test1.point.y < 0 || test1.point.x > 32 || test1.point.x < 0 ||
+       test2.point.y > 32 || test2.point.y < 0 || test2.point.x > 32 || test2.point.x < 0)
+    {
+        printf( " a");
+    }
     swap(coinSpawnManager.spawner_array[last_occ_pos], coinSpawnManager.spawner_array[pos]);
+    coinSpawnManager.free_spawners++;
     return 0;
 }
 void spawn_coin(entity_t coin_size, map_point_t map[])
 {
-    if( coin_size < ENTITY_COIN_SMALL)
+    if( coin_size < ENTITY_COIN_SMALL || coinSpawnManager.free_spawners == 0)
     {
         return;
     }
@@ -267,6 +274,10 @@ void spawn_coin(entity_t coin_size, map_point_t map[])
     int which_spawner_to_use = rand() % coinSpawnManager.free_spawners;
     int y = (int )coinSpawnManager.spawner_array[which_spawner_to_use].point.y;
     int x = (int) coinSpawnManager.spawner_array[which_spawner_to_use].point.x;
+    if(x > 32 || y > 32 || y < 0 || x < 0 )
+    {
+        printf("a");
+    }
     map_point_t temp;
     memcpy(&temp, &coinSpawnManager.spawner_array[which_spawner_to_use], sizeof(map_point_t));
     coin_spawn_occ(temp);
@@ -319,4 +330,25 @@ int render_map(map_point_t map[], WINDOW * window)
         }
     }
     return 0;
+}
+void attribute_list_init()
+{
+    init_pair(1, COLOR_YELLOW, COLOR_BLACK);
+    init_pair(2, COLOR_WHITE, COLOR_BLACK);
+    init_pair(3, COLOR_MAGENTA, COLOR_BLACK);
+    init_pair(4, COLOR_RED, COLOR_YELLOW);
+    init_pair(5, COLOR_BLACK, COLOR_WHITE);
+    init_pair(6, COLOR_BLACK, COLOR_RED);
+    for(int i = 0; i < 13; i++)
+    {
+        int col = attribute_list[i].color_p;
+        attribute_list[i].ch = attribute_list[i].ch | A_REVERSE | COLOR_PAIR(col);
+    }
+}
+void ncurses_funcs_init()
+{
+    initscr();
+    noecho();
+    start_color();
+    keypad(stdscr, true);
 }
