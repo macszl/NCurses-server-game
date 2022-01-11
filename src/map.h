@@ -54,5 +54,4 @@ int map_init(map_point_t map[]);
 void ncurses_funcs_init();
 void attribute_list_init();
 int render_map(map_point_t map[], WINDOW * window);
-void add_new_entity(entity_t, map_point_t map[]);
 #endif //NCURSES_SERVER_GAME_MAP_H

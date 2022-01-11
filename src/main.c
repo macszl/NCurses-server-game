@@ -21,10 +21,12 @@
 //3. zdefiniowanie autonomicznego zachowania bestii, każda bestia na nowym wątku
 //4. wywoływanie procesów graczy
 
-
+#define COIN_SPAWNER_NUM 24
+#define BEAST_SPAWNER_NUM 20
 #define DEBUG 0
 #define NO_INPUT 1
 #define MULTITHREADED_INPUT 0
+#define TOTAL_BEAST_LIMIT 8
 #define swap(x,y) do \
    { unsigned char swap_temp[sizeof(x) == sizeof(y) ? (signed)sizeof(x) : -1]; \
      memcpy(swap_temp,&y,sizeof(x)); \
@@ -35,39 +37,45 @@
 //TODO these 2 parameters will be transferred to the players for error checking
 
 //2 parameters defined in the map.h header file
-extern int MAP_LENGTH;
-extern int MAP_WIDTH;
+extern const int MAP_LENGTH;
+extern const int MAP_WIDTH;
 extern struct entity_ncurses_attributes_t attribute_list[];
 
-typedef struct beast_t
+typedef struct beast_tracker_t
 {
-    point_t curr_place;
-} beast_t;
-
+    map_point_t * beasts[TOTAL_BEAST_LIMIT];
+    int size;
+} beast_tracker_t;
 typedef struct coin_spawn_manager_t
 {
-    map_point_t * spawner_array;
+    map_point_t spawner_array[COIN_SPAWNER_NUM];
     int free_spawners;
     int total_spawners;
 } coin_spawn_manager_t;
 
-//database storing the ncurses colors for each entity type
+typedef struct beast_spawn_manager_t
+{
+    map_point_t spawner_array[BEAST_SPAWNER_NUM];
+    int free_spawners;
+    int total_spawners;
+} beast_spawn_manager_t;
 
-
-void spawn_beast();
 void spawn_coin(entity_t coin_size, map_point_t map[]);
-void beast_move(beast_t * beast_ptr, beast_t new_beast_loc);
 int coin_spawn_init(map_point_t map[]);
-
 int coin_spawn_occ(map_point_t occupied_point);
 int coin_spawn_free(map_point_t freed_point);
 int coin_spawn_search_for_element_internal(map_point_t element);
 
+int spawn_beast(map_point_t map[], beast_tracker_t beast_tracker);
+int beast_spawn_init(map_point_t map[]);
+int beast_move(map_point_t map[], beast_tracker_t beast_tracker, map_point_t * beast);
+int handle_beasts(map_point_t map[], beast_tracker_t beast_tracker);
 
 void *input_routine(void *input_storage);
-void handle_event(int c, map_point_t map[]);
+void handle_event(int c, map_point_t map[], beast_tracker_t beast_tracker);
 
 coin_spawn_manager_t coinSpawnManager;
+beast_spawn_manager_t beastSpawnManager;
 
 #if MULTITHREADED_INPUT
 pthread_mutex_t mutex_input = PTHREAD_MUTEX_INITIALIZER;
@@ -85,9 +93,9 @@ int main() {
     if(err != 0)
         return 1;
 
-    err = coin_spawn_init(map);
-    if(err != 0)
-        return 1;
+    beast_tracker_t beast_tracker = {.size = 0};
+    coin_spawn_init(map);
+    beast_spawn_init(map);
 
     //required ncurses initialization functions
     ncurses_funcs_init();
@@ -143,11 +151,11 @@ int main() {
         render_map(map, window);
         wrefresh(window);
         int c = getch();
-        handle_event(c, map);
+        handle_event(c, map, beast_tracker);
+        handle_beasts(map, beast_tracker);
         i++;
     }
 
-    free(coinSpawnManager.spawner_array);
     endwin();
 #if MULTITHREADED_INPUT
     pthread_mutex_destroy(&mutex_input);
@@ -156,7 +164,8 @@ int main() {
     return 0;
 }
 
-void handle_event(int c, map_point_t map[])
+//Keystroke handling: adding entities based on which key was pressed
+void handle_event(int c, map_point_t map[], beast_tracker_t beast_tracker)
 {
     switch (c) {
         //arrow key handling: works only with unix distros as unix represents arrow keys as 3 characters
@@ -171,23 +180,23 @@ void handle_event(int c, map_point_t map[])
         case 'B':
         case 'b':
         {
-            add_new_entity(ENTITY_BEAST, map);
+            spawn_beast(map, beast_tracker);
             break;
         }
         case 'c':
         {
-            add_new_entity(ENTITY_COIN_SMALL, map);
+            spawn_coin(ENTITY_COIN_SMALL, map);
             break;
         }
         case 'C':
         {
-            add_new_entity(ENTITY_COIN_BIG, map);
+            spawn_coin(ENTITY_COIN_BIG, map);
             break;
         }
         case 'T':
         case 't':
         {
-            add_new_entity(ENTITY_COIN_TREASURE, map);
+            spawn_coin(ENTITY_COIN_TREASURE, map);
             break;
         }
         case 'Q':
@@ -223,12 +232,115 @@ void *input_routine(void *input_storage) {
     return NULL;
 }
 #endif
+// Function that initializes the beastManager variable
+int beast_spawn_init(map_point_t map[])
+{
+    unsigned long total_spawners = 0;
+    unsigned long free_spawners = 0;
+    for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
+    {
+        if( map[i].entity_type == ENTITY_FREE && map[i].spawnerType == BEAST_SPAWNER)
+        {
+            total_spawners++;
+            free_spawners++;
+        }
+    }
+
+    beastSpawnManager.free_spawners = (int) free_spawners;
+    beastSpawnManager.total_spawners = (int) total_spawners;
+
+    int arr_cnt = 0;
+    for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
+    {
+        if( map[i].entity_type == ENTITY_FREE && map[i].spawnerType == BEAST_SPAWNER)
+        {
+            memcpy( &coinSpawnManager.spawner_array[arr_cnt], &map[i], sizeof(map_point_t));
+            arr_cnt++;
+        }
+    }
+    return 0;
+}
+int spawn_beast(map_point_t map[], beast_tracker_t beast_tracker)
+{
+    int which_beast_spawner = rand() % beastSpawnManager.free_spawners;
+
+    beastSpawnManager.spawner_array[which_beast_spawner].entity_type = ENTITY_BEAST;
+    int loc = beastSpawnManager.free_spawners - 1;
+    swap(beastSpawnManager.spawner_array[which_beast_spawner], beastSpawnManager.spawner_array[loc]);
+    beastSpawnManager.free_spawners--;
+
+
+    int b_x = (int) beastSpawnManager.spawner_array[loc].point.x;
+    int b_y = (int) beastSpawnManager.spawner_array[loc].point.y;
+    beast_tracker.beasts[beast_tracker.size] = &map[ b_y * MAP_WIDTH + b_x];
+    beast_tracker.size++;
+
+    return 0;
+}
+int beast_move( map_point_t map[],  beast_tracker_t beast_tracker, map_point_t * beast)
+{
+    //TODO Player collision, beast_spawner_occupation
+    //error checking
+    if( beast->entity_type != ENTITY_BEAST)
+        return -1;
+
+    int beast_tracker_index = 0;
+    bool beast_found = false;
+    for(int i = 0; i < beast_tracker.size; i++)
+    {
+        if( beast_tracker.beasts[i] == beast)
+        {
+            beast_found = true;
+            break;
+        }
+        beast_tracker_index++;
+    }
+
+    if(!beast_found)
+        return -1;
+
+    //checking which of the 4 sides are occupied
+    map_point_t * possible_locs[4];
+    int locs_cnt = 0;
+    int b_x = (int) beast->point.x;
+    int b_y = (int) beast->point.x;
+    for(int i = 0; i < 1; i++)
+    {
+        for(int j = 0; j < 1; j++)
+        {
+            if( map[(b_y + i) * MAP_WIDTH + b_x + j].entity_type == ENTITY_FREE )
+            {
+                possible_locs[locs_cnt] = &map[(b_y + i) * MAP_WIDTH + b_x + j];
+                locs_cnt++;
+            }
+        }
+    }
+    if(locs_cnt == 0)
+        return 0;
+
+    int which_loc = rand() % locs_cnt;
+    possible_locs[which_loc]->entity_type = ENTITY_BEAST;
+    beast->entity_type = ENTITY_FREE;
+
+    beast_tracker.beasts[beast_tracker_index] = possible_locs[which_loc];
+    return 0;
+}
+
+int handle_beasts(map_point_t map[], beast_tracker_t beast_tracker)
+{
+    for(int i = 0; i < beast_tracker.size; i++)
+    {
+        beast_move(map, beast_tracker, beast_tracker.beasts[i]);
+    }
+    return 0;
+}
+
+
 // Function that initializes the coinManager variable which allows oversight over all the coin spawns over the map
 int coin_spawn_init(map_point_t map[])
 {
     unsigned long total_spawners = 0;
     unsigned long free_spawners = 0;
-    coinSpawnManager.spawner_array = NULL;
     for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
     {
         if( map[i].entity_type == ENTITY_FREE && map[i].spawnerType == COIN_SPAWNER)
@@ -240,10 +352,6 @@ int coin_spawn_init(map_point_t map[])
 
     coinSpawnManager.free_spawners = (int) free_spawners;
     coinSpawnManager.total_spawners = (int) total_spawners;
-    if( ( coinSpawnManager.spawner_array = malloc(sizeof(map_point_t) * total_spawners)) == NULL)
-    {
-        return -1;
-    }
 
     int arr_cnt = 0;
     for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
@@ -254,7 +362,6 @@ int coin_spawn_init(map_point_t map[])
             arr_cnt++;
         }
     }
-
     return 0;
 }
 
@@ -349,41 +456,3 @@ void spawn_coin(entity_t coin_size, map_point_t map[])
     coin_spawn_occ(temp);
     map[y * MAP_WIDTH + x].entity_type = coin_size;
 }
-
-void add_new_entity(entity_t entity, map_point_t map[])
-{
-    //entity spawn handler
-    switch (entity) {
-        case ENTITY_BEAST:
-        {
-            spawn_beast();
-            break;
-        }
-        case ENTITY_COIN_SMALL:
-        case ENTITY_COIN_BIG:
-        case ENTITY_COIN_TREASURE:
-        {
-            spawn_coin(entity, map);
-            break;
-        }
-        default:
-            break;
-    }
-}
-
-void beast_move(beast_t * beast_ptr, beast_t new_beast_loc)
-{
-#if DEBUG
-    printf("Beast location updated from %d, %d to %d, %d\n", beast_ptr->curr_place.x, beast_ptr->curr_place.y,
-           new_beast_loc.curr_place.x, new_beast_loc.curr_place.y);
-#endif
-    beast_ptr->curr_place.x = new_beast_loc.curr_place.x;
-    beast_ptr->curr_place.y = new_beast_loc.curr_place.y;
-}
-void spawn_beast()
-{
-    //TODO this function spawns a beast on a new thread
-}
-
-//map updating function using ncurses
-
