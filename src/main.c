@@ -256,46 +256,26 @@ int beast_spawn_init(map_point_t map[])
 }
 int spawn_beast(beast_tracker_t * beast_tracker)
 {
-    if(beast_tracker->size < 0 ||beast_tracker->size == TOTAL_BEAST_LIMIT || beastSpawnManager.free_spawners == 0)
+    if(beast_tracker->size < 0 || beast_tracker->size == TOTAL_BEAST_LIMIT || beastSpawnManager.free_spawners == 0)
     {
         return -1;
     }
     int which_beast_spawner = rand() % beastSpawnManager.free_spawners;
-    if(beast_tracker->size < 0) {
-        return -1;
-    }
     beastSpawnManager.spawner_array[which_beast_spawner]->entity_type = ENTITY_BEAST;
-    if(beast_tracker->size < 0) {
-        return -1;
-    }
     int loc = beastSpawnManager.free_spawners - 1;
-    if(beast_tracker->size < 0) {
-        return -1;
-    }
     swap(beastSpawnManager.spawner_array[which_beast_spawner], beastSpawnManager.spawner_array[loc]);
-    if(beast_tracker->size < 0) {
-        return -1;
-    }
     beastSpawnManager.free_spawners--;
-    if(beast_tracker->size < 0) {
-        return -1;
-    }
 
     beast_tracker->beasts[beast_tracker->size] = beastSpawnManager.spawner_array[loc];
-    if(beast_tracker->size < 0) {
-        return -1;
-    }
     beast_tracker->size = beast_tracker->size + 1;
-    if(beast_tracker->size < 0) {
-        return -1;
-    }
+
     return 0;
 }
 int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t * beast)
 {
     //TODO Player collision, beast_spawner_occupation
     //error checking
-    if( beast->entity_type != ENTITY_BEAST || beast_tracker->size < 0) {
+    if( beast->entity_type != ENTITY_BEAST) {
         return -1;
     }
     int beast_tracker_index = 0;
@@ -345,9 +325,6 @@ int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t
 
 int handle_beasts(map_point_t map[], beast_tracker_t * beast_tracker)
 {
-    if(beast_tracker->size < 0) {
-        return -1;
-    }
     for(int i = 0; i < beast_tracker->size; i++)
     {
         beast_move(map, beast_tracker, beast_tracker->beasts[i]);
