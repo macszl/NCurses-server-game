@@ -21,7 +21,7 @@
 //3. zdefiniowanie autonomicznego zachowania bestii, każda bestia na nowym wątku
 //4. wywoływanie procesów graczy
 
-#define COIN_SPAWNER_NUM 24
+#define COIN_SPAWNER_NUM 40
 #define BEAST_SPAWNER_NUM 20
 #define DEBUG 0
 #define NO_INPUT 1
@@ -37,8 +37,10 @@
 //TODO these 2 parameters will be transferred to the players for error checking
 
 //2 parameters defined in the map.h header file
-extern const int MAP_LENGTH;
-extern const int MAP_WIDTH;
+const int MAP_WIDTH = 32;
+const int MAP_LENGTH = 32;
+const int STAT_WINDOW_START_Y = 0;
+const int STAT_WINDOW_START_X = 40;
 extern struct entity_ncurses_attributes_t attribute_list[];
 
 typedef struct beast_tracker_t
@@ -66,8 +68,10 @@ int beast_spawn_init(map_point_t map[]);
 int beast_move(map_point_t map[], beast_tracker_t * beast_tracker, map_point_t * beast);
 int handle_beasts(map_point_t map[], beast_tracker_t * beast_tracker);
 
-void *input_routine(void *input_storage);
+
 void handle_event(int c, map_point_t map[], beast_tracker_t * beast_tracker);
+
+void *input_routine(void *input_storage);
 
 coin_spawn_manager_t coinSpawnManager;
 beast_spawn_manager_t beastSpawnManager;
@@ -84,7 +88,7 @@ int main() {
     map_point_t map[MAP_LENGTH * MAP_WIDTH];
     //TODO pre-game intialization menus
 
-    int err = map_init(map);
+    int err = map_init(map, MAP_WIDTH, MAP_LENGTH);
     if(err != 0)
         return 1;
 
@@ -94,12 +98,14 @@ int main() {
 
     //required ncurses initialization functions
     ncurses_funcs_init();
-
-    WINDOW * window = newwin(MAP_WIDTH + 1, MAP_LENGTH + 1,0,0);
+    int server_pid = getpid();
+    WINDOW * stats_window = newwin(10, 50, STAT_WINDOW_START_Y, STAT_WINDOW_START_X);
+    WINDOW * game_window = newwin(MAP_WIDTH + 1, MAP_LENGTH + 1,0,0);
     refresh();
-    box(window, 0, 0);
-    wrefresh(window);
-
+    box(game_window, 0, 0);
+    box(stats_window, 0, 0);
+    wrefresh(game_window);
+    wrefresh(stats_window);
     //assigning background color and letter color to every entity
     attribute_list_init();
 
@@ -128,8 +134,8 @@ int main() {
             pthread_mutex_unlock(&mutex_input);
             sem_post(&input_found_blockade);
             sleep(1);
-            render_map(map, window);
-            wrefresh(window);
+            render_map(map, game_window);
+            wrefresh(game_window);
             continue;
         }
 
@@ -138,18 +144,22 @@ int main() {
     }
 
     pthread_join(thread1, NULL);
-#endif
+#else
     //singlethreaded mode: made for the ease of debugging
     int i = 0;
     while (user_did_not_quit)
     {
-        render_map(map, window);
-        wrefresh(window);
+        render_map(map, game_window, MAP_WIDTH, MAP_LENGTH);
+        stat_window_display(stats_window, server_pid, i);
+        wrefresh(game_window);
+        wrefresh(stats_window);
         int c = getch();
+        flushinp();
         handle_event(c, map, &beast_tracker);
         handle_beasts(map, &beast_tracker);
         i++;
     }
+#endif
 
     endwin();
 #if MULTITHREADED_INPUT
@@ -169,8 +179,7 @@ void handle_event(int c, map_point_t map[], beast_tracker_t * beast_tracker)
         case KEY_LEFT:
         case KEY_UP:
         {
-            getch();
-            getch();
+            break;
         }
         case 'B':
         case 'b':
@@ -234,7 +243,7 @@ int beast_spawn_init(map_point_t map[])
     unsigned long free_spawners = 0;
     for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
     {
-        if( map[i].entity_type == ENTITY_FREE && map[i].spawnerType == BEAST_SPAWNER)
+        if( map[i].point_display_entity == ENTITY_FREE && map[i].spawnerType == BEAST_SPAWNER)
         {
             total_spawners++;
             free_spawners++;
@@ -246,7 +255,7 @@ int beast_spawn_init(map_point_t map[])
     int arr_cnt = 0;
     for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
     {
-        if( map[i].entity_type == ENTITY_FREE && map[i].spawnerType == BEAST_SPAWNER)
+        if( map[i].point_display_entity == ENTITY_FREE && map[i].spawnerType == BEAST_SPAWNER)
         {
             beastSpawnManager.spawner_array[arr_cnt] = &map[i];
             arr_cnt++;
@@ -261,7 +270,7 @@ int spawn_beast(beast_tracker_t * beast_tracker)
         return -1;
     }
     int which_beast_spawner = rand() % beastSpawnManager.free_spawners;
-    beastSpawnManager.spawner_array[which_beast_spawner]->entity_type = ENTITY_BEAST;
+    beastSpawnManager.spawner_array[which_beast_spawner]->point_display_entity = ENTITY_BEAST;
     int loc = beastSpawnManager.free_spawners - 1;
     swap(beastSpawnManager.spawner_array[which_beast_spawner], beastSpawnManager.spawner_array[loc]);
     beastSpawnManager.free_spawners--;
@@ -275,7 +284,7 @@ int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t
 {
     //TODO Player collision, beast_spawner_occupation
     //error checking
-    if( beast->entity_type != ENTITY_BEAST) {
+    if( beast->point_display_entity != ENTITY_BEAST) {
         return -1;
     }
     int beast_tracker_index = 0;
@@ -304,7 +313,7 @@ int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t
         {
             if( (i == -1 && j == 0) || (i == 1 && j == 0) || (i == 0 && j == -1) || (i == 0 && j == 1)  )
             {
-                if (map[(b_y + i) * MAP_WIDTH + b_x + j].entity_type == ENTITY_FREE)
+                if (map[(b_y + i) * MAP_WIDTH + b_x + j].point_display_entity == ENTITY_FREE)
                 {
                     possible_locs[locs_cnt] = &map[(b_y + i) * MAP_WIDTH + b_x + j];
                     locs_cnt++;
@@ -316,8 +325,8 @@ int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t
         return 0;
 
     int which_loc = rand() % locs_cnt;
-    possible_locs[which_loc]->entity_type = ENTITY_BEAST;
-    beast->entity_type = ENTITY_FREE;
+    possible_locs[which_loc]->point_display_entity = ENTITY_BEAST;
+    beast->point_display_entity = ENTITY_FREE;
 
     beast_tracker->beasts[beast_tracker_index] = possible_locs[which_loc];
     return 0;
@@ -339,7 +348,7 @@ int coin_spawn_init(map_point_t map[])
     unsigned long free_spawners = 0;
     for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
     {
-        if( map[i].entity_type == ENTITY_FREE && map[i].spawnerType == COIN_SPAWNER)
+        if( map[i].point_display_entity == ENTITY_FREE && map[i].spawnerType == COIN_SPAWNER)
         {
             free_spawners++;
         }
@@ -350,7 +359,7 @@ int coin_spawn_init(map_point_t map[])
     int arr_cnt = 0;
     for(int i = 0; i < MAP_WIDTH * MAP_LENGTH; i++)
     {
-        if( map[i].entity_type == ENTITY_FREE && map[i].spawnerType == COIN_SPAWNER)
+        if( map[i].point_display_entity == ENTITY_FREE && map[i].spawnerType == COIN_SPAWNER)
         {
             coinSpawnManager.spawner_array[arr_cnt] = &map[i];
             arr_cnt++;
@@ -375,7 +384,7 @@ void spawn_coin(entity_t coin_size, map_point_t map[])
         printf("a");
     }
 #endif
-    map[y * MAP_WIDTH + x].entity_type = coin_size;
+    map[y * MAP_WIDTH + x].point_display_entity = coin_size;
 
     int free_spwn_cnt = coinSpawnManager.free_spawners;
     swap(coinSpawnManager.spawner_array[which_spawner_to_use], coinSpawnManager.spawner_array[free_spwn_cnt - 1]);

@@ -9,7 +9,8 @@
 
 typedef enum entity_t
 {
-    ENTITY_FREE = 0,
+    ENTITY_UNKNOWN = 0,
+    ENTITY_FREE ,
     ENTITY_WALL ,
     ENTITY_BUSH ,
     ENTITY_CAMPSITE ,
@@ -40,7 +41,8 @@ typedef struct point_t
 typedef struct map_point_t
 {
     point_t point;
-    entity_t entity_type;
+    entity_t point_display_entity;
+    entity_t point_terrain_entity;
     spawner_type spawnerType;
 } map_point_t;
 
@@ -50,8 +52,9 @@ struct entity_ncurses_attributes_t
     chtype ch;
     int color_p; // which color pair is assigned to the given entity
 };
-int map_init(map_point_t map[]);
+int map_init(map_point_t map[], int MAP_WIDTH, int MAP_LENGTH);
 void ncurses_funcs_init();
 void attribute_list_init();
-int render_map(map_point_t map[], WINDOW * window);
+int render_map(map_point_t map[], WINDOW * window, int MAP_WIDTH, int MAP_LENGTH);
+void stat_window_display(WINDOW * window, int pid, int turn_cnt);
 #endif //NCURSES_SERVER_GAME_MAP_H

@@ -5,11 +5,10 @@
 #include "map.h"
 #include <stdio.h>
 
-const int MAP_LENGTH = 32;
-const int MAP_WIDTH = 32;
 
 struct entity_ncurses_attributes_t attribute_list[] =
         {
+                {.entity = ENTITY_UNKNOWN, .ch = ' ', .color_p = 7},
                 {.entity = ENTITY_FREE, .ch = '.', .color_p = 5},
                 {.entity = ENTITY_WALL, .ch = 'O', .color_p = 2},
                 {.entity = ENTITY_BUSH, .ch = '$', .color_p = 5},
@@ -26,7 +25,7 @@ struct entity_ncurses_attributes_t attribute_list[] =
         };
 
 
-int map_init(map_point_t map[]) {
+int map_init(map_point_t map[], const int MAP_WIDTH, const int MAP_LENGTH) {
 
     //4x4 test map initialization
 //    for(int i = 0; i < MAP_WIDTH; i++)
@@ -60,18 +59,20 @@ int map_init(map_point_t map[]) {
     return 0;
 }
 
-int render_map(map_point_t map[], WINDOW * window)
+int render_map(map_point_t map[], WINDOW * window, const int MAP_WIDTH, const int MAP_LENGTH)
 {
     for(int i = 0; i < MAP_WIDTH; i++)
     {
         for(int j = 0; j < MAP_LENGTH; j++)
         {
-            int ent_index = (int) map[i * MAP_WIDTH + j].entity_type;
+            int ent_index = (int) map[i * MAP_WIDTH + j].point_display_entity;
             mvwaddch(window ,i, j, attribute_list[ent_index].ch);
         }
     }
     return 0;
 }
+
+
 void ncurses_funcs_init()
 {
     initscr();
@@ -88,9 +89,17 @@ void attribute_list_init()
     init_pair(4, COLOR_RED, COLOR_YELLOW);
     init_pair(5, COLOR_BLACK, COLOR_WHITE);
     init_pair(6, COLOR_BLACK, COLOR_RED);
-    for(int i = 0; i < 13; i++)
+    init_pair(7, COLOR_BLACK, COLOR_BLACK);
+    for(int i = 0; i < 14; i++)
     {
         int col = attribute_list[i].color_p;
         attribute_list[i].ch = attribute_list[i].ch | A_REVERSE | COLOR_PAIR(col);
     }
 }
+void stat_window_display(WINDOW * window, int pid, int turn_cnt)
+{
+    mvwprintw(window, 1, 1, "Current turn: %d", turn_cnt);
+    mvwprintw(window, 2, 1, "Server process ID: %d", pid);
+}
+
+
