@@ -6,6 +6,14 @@
 #define NCURSES_SERVER_GAME_PLAYER_H
 
 #include "map.h"
+#include "fifohelper.h"
+#include <stdlib.h>
+#include <time.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 typedef enum dir_t {
     LEFT = 0,
@@ -17,11 +25,34 @@ typedef enum dir_t {
 typedef struct player_t {
     map_point_t * player;
     map_point_t * spawn;
+    entity_t which_player;
 } player_t;
 
-void handle_event(int c, map_point_t map[]);
-void spawn_player(player_t * player, map_point_t * map, int map_width, int map_length);
-void player_move_human(dir_t, player_t * player);
-void player_move_cpu(player_t * player);
+typedef struct stats_t {
+    int carried;
+    int brought;
+} stats_t;
+typedef struct server_info_t
+{
+    char serv_to_p_fifo_name[20];
+    char p_to_serv_fifo_name[20];
+    int p_to_serv_fd;
+    int serv_to_p_fd;
+    int player_num;
+    int process_id;
+    bool is_free;
+    int carried;
+    int brought;
+} server_info_t;
+void handle_event(int c, map_point_t map[], player_t * player, int map_width);
+void spawn_player(player_t * player, map_point_t * map, int map_width, int map_length, entity_t player_type);
+void player_move_human(map_point_t* map, dir_t, player_t * player, int map_width);
+void player_move_cpu(map_point_t* map, player_t * player, int map_width);
+
+void server_receive_map_dimensions(int * map_width_p, int * map_length_p, int fd_read);
+void server_receive_map_update(map_point_t * map, int fd_read, int map_width, int map_length);
+void server_receive_spawn(player_t * player,map_point_t * map, int fd_read , int map_width, int map_length);
+void server_receive_serverside_stats(stats_t * stats_p, int fd_read);
+void server_send_move(player_t moved_player, int fd_write);
 
 #endif //NCURSES_SERVER_GAME_PLAYER_H

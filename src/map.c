@@ -59,6 +59,18 @@ int map_init(map_point_t map[], const int MAP_WIDTH, const int MAP_LENGTH) {
     return 0;
 }
 
+int map_place_fow_player(map_point_t map[], const int MAP_WIDTH, const int MAP_LENGTH) {
+
+    for(int i = 0; i < MAP_WIDTH; i++)
+    {
+        for(int j = 0; j < MAP_LENGTH; j++)
+        {
+            map[i * MAP_WIDTH + j].point_display_entity = ENTITY_UNKNOWN;
+            map[i * MAP_WIDTH + j].point_terrain_entity = ENTITY_UNKNOWN;
+        }
+    }
+    return 0;
+}
 int render_map(map_point_t map[], WINDOW * window, const int MAP_WIDTH, const int MAP_LENGTH)
 {
     for(int i = 0; i < MAP_WIDTH; i++)
@@ -96,10 +108,14 @@ void attribute_list_init()
         attribute_list[i].ch = attribute_list[i].ch | A_REVERSE | COLOR_PAIR(col);
     }
 }
-void stat_window_display(WINDOW * window, int pid, int turn_cnt)
+void stat_window_display_server(WINDOW * window, int pid, int turn_cnt)
 {
     mvwprintw(window, 1, 1, "Current turn: %d", turn_cnt);
     mvwprintw(window, 2, 1, "Server process ID: %d", pid);
 }
 
-
+void stat_window_display_player(WINDOW * window, int pid, int turn_cnt)
+{
+    mvwprintw(window, 1, 1, "Current turn: %d", turn_cnt);
+    mvwprintw(window, 2, 1, "Server process ID: %d", pid);
+}

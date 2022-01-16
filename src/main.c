@@ -1,16 +1,20 @@
+#include <unistd.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/types.h>
 #include <stdbool.h>
 #include <ncurses.h>
 #include <string.h>
 #include <pthread.h>
 #include <semaphore.h>
-#include <unistd.h>
-
-
+#include <errno.h>
+#include <fcntl.h>
 #include "map.h"
+#include <signal.h>
+#include "fifohelper.h"
 
 //TODO: CELE PROJEKTOWE:
 
@@ -25,7 +29,7 @@
 #define BEAST_SPAWNER_NUM 20
 #define DEBUG 0
 #define NO_INPUT 1
-#define MULTITHREADED_INPUT 0
+#define MULTITHREADED_INPUT 1
 #define TOTAL_BEAST_LIMIT 8
 #define swap(x,y) do \
    { unsigned char swap_temp[sizeof(x) == sizeof(y) ? (signed)sizeof(x) : -1]; \
@@ -36,13 +40,14 @@
 
 //TODO these 2 parameters will be transferred to the players for error checking
 
-//2 parameters defined in the map.h header file
+//STUFF NECESSARY FOR MAP RENDERING AND VIEW
 const int MAP_WIDTH = 32;
 const int MAP_LENGTH = 32;
 const int STAT_WINDOW_START_Y = 0;
 const int STAT_WINDOW_START_X = 40;
 extern struct entity_ncurses_attributes_t attribute_list[];
 
+//STRUCTS NEEDED FOR THE MANAGAMENT OF COINS AND BEASTS
 typedef struct beast_tracker_t
 {
     map_point_t * beasts[TOTAL_BEAST_LIMIT];
@@ -60,33 +65,71 @@ typedef struct beast_spawn_manager_t
     int free_spawners;
 } beast_spawn_manager_t;
 
+//TODO THEORETICAL SERVER STUFF: STRUCT
+typedef struct server_side_player_t
+{
+    char serv_to_p_fifo_name[20];
+    char p_to_serv_fifo_name[20];
+    int p_to_serv_fd;
+    int serv_to_p_fd;
+    int player_num;
+    int process_id;
+    bool is_free;
+    int carried;
+    int brought
+} server_side_player_t;
+
+typedef struct player_manager_t
+{
+    server_side_player_t players[4];
+    int cur_size;
+} player_manager_t;
+//COIN MANAGEMENT STUFF
 void spawn_coin(entity_t coin_size, map_point_t map[]);
 int coin_spawn_init(map_point_t map[]);
 
+//BEAST STUFF
 int spawn_beast(beast_tracker_t * beast_tracker);
 int beast_spawn_init(map_point_t map[]);
 int beast_move(map_point_t map[], beast_tracker_t * beast_tracker, map_point_t * beast);
 int handle_beasts(map_point_t map[], beast_tracker_t * beast_tracker);
 
+//PLAYER STUFF
+void player_manager_init();
+void player_send_map_dimensions(int which_player);
+void player_send_map_update(map_point_t map[], int which_player, point_t curr_location);
+void player_send_serverside_stats(int which_player, int carried, int brought);
+void player_send_spawn(map_point_t * map, int map_width, int map_length, int which_player);
+void player_receive_move(int which_player);
+
 
 void handle_event(int c, map_point_t map[], beast_tracker_t * beast_tracker);
 
+//THREAD STUFF
 void *input_routine(void *input_storage);
+void *listening_join_routine(void * param);
+void *listening_disconnect_routine(void * param);
 
 coin_spawn_manager_t coinSpawnManager;
 beast_spawn_manager_t beastSpawnManager;
+player_manager_t playerManager;
 
 #if MULTITHREADED_INPUT
 pthread_mutex_t mutex_input = PTHREAD_MUTEX_INITIALIZER;
 sem_t input_found_blockade;
 #endif
+pthread_mutex_t mutex_player_manag = PTHREAD_MUTEX_INITIALIZER;
 
 bool user_did_not_quit = true;
+bool listening_join_routine_not_terminated = true;
+bool disconnect_routine_not_terminated = true;
 
 int main() {
-    srand(time(NULL));
+    srand((unsigned int) time(NULL));
+    make_fifos();
+
+    player_manager_init();
     map_point_t map[MAP_LENGTH * MAP_WIDTH];
-    //TODO pre-game intialization menus
 
     int err = map_init(map, MAP_WIDTH, MAP_LENGTH);
     if(err != 0)
@@ -99,13 +142,14 @@ int main() {
     //required ncurses initialization functions
     ncurses_funcs_init();
     int server_pid = getpid();
+
     WINDOW * stats_window = newwin(10, 50, STAT_WINDOW_START_Y, STAT_WINDOW_START_X);
     WINDOW * game_window = newwin(MAP_WIDTH + 1, MAP_LENGTH + 1,0,0);
+
     refresh();
     box(game_window, 0, 0);
     box(stats_window, 0, 0);
-    wrefresh(game_window);
-    wrefresh(stats_window);
+
     //assigning background color and letter color to every entity
     attribute_list_init();
 
@@ -116,6 +160,10 @@ int main() {
     pthread_t thread1;
     pthread_create(&thread1, NULL, input_routine, &input);
 #endif
+    pthread_t thread2;
+    pthread_create(&thread2, NULL, listening_join_routine, NULL);
+    pthread_t thread3;
+    pthread_create(&thread3, NULL, listening_disconnect_routine, NULL);
     //MULTITHREADED_INPUT loop
 
 #if MULTITHREADED_INPUT
@@ -130,27 +178,42 @@ int main() {
         }
         if(input != NO_INPUT)
         {
-            handle_event(input, map);
-            pthread_mutex_unlock(&mutex_input);
+            handle_event(input, map, &beast_tracker);
+
             sem_post(&input_found_blockade);
-            sleep(1);
-            render_map(map, game_window);
+
+            handle_beasts(map, &beast_tracker);
+
+            render_map(map, game_window, MAP_WIDTH, MAP_LENGTH);
+            stat_window_display_server(stats_window, server_pid, turn_counter);
+            turn_counter++;
+
             wrefresh(game_window);
+            wrefresh(stats_window);
+            usleep(2000 * 1000);
             continue;
         }
+        else
+        {
+            handle_beasts(map, &beast_tracker);
 
+            render_map(map, game_window, MAP_WIDTH, MAP_LENGTH);
+            stat_window_display_server(stats_window, server_pid, turn_counter);
+
+            wrefresh(game_window);
+            wrefresh(stats_window);
+            turn_counter++;
+            usleep(2000 * 1000);
+        }
         pthread_mutex_unlock(&mutex_input);
-        turn_counter++;
     }
-
-    pthread_join(thread1, NULL);
 #else
     //singlethreaded mode: made for the ease of debugging
     int i = 0;
     while (user_did_not_quit)
     {
         render_map(map, game_window, MAP_WIDTH, MAP_LENGTH);
-        stat_window_display(stats_window, server_pid, i);
+        stat_window_display_server(stats_window, server_pid, i);
         wrefresh(game_window);
         wrefresh(stats_window);
         int c = getch();
@@ -162,7 +225,17 @@ int main() {
 #endif
 
     endwin();
+
+    listening_join_routine_not_terminated = false;
+    disconnect_routine_not_terminated = false;
+    pthread_join(thread2, NULL);
+    pthread_join(thread3, NULL);
+    unlink_fifos();
+
+    pthread_mutex_destroy(&mutex_player_manag);
+
 #if MULTITHREADED_INPUT
+    pthread_join(thread1, NULL);
     pthread_mutex_destroy(&mutex_input);
     sem_destroy(&input_found_blockade);
 #endif
@@ -173,7 +246,7 @@ int main() {
 void handle_event(int c, map_point_t map[], beast_tracker_t * beast_tracker)
 {
     switch (c) {
-        //arrow key handling: works only with unix distros as unix represents arrow keys as 3 characters
+        //arrow key handling:
         case KEY_RIGHT:
         case KEY_DOWN:
         case KEY_LEFT:
@@ -219,9 +292,11 @@ void *input_routine(void *input_storage) {
     while (1) {
         pthread_mutex_lock(&mutex_input);
         *(int *) input_storage = NO_INPUT;
+        pthread_mutex_unlock(&mutex_input);
         char c = (char) getch();
         flushinp();
         if( c != NO_INPUT) {
+            pthread_mutex_lock(&mutex_input);
             *(int *) input_storage = (int) c;
             pthread_mutex_unlock(&mutex_input);
             sem_wait(&input_found_blockade);
@@ -231,11 +306,211 @@ void *input_routine(void *input_storage) {
                 continue;
             }
         }
-        pthread_mutex_unlock(&mutex_input);
     }
     return NULL;
 }
 #endif
+
+void *listening_join_routine(void * param)
+{
+    int fd_read = open("fifo_p_to_s_init", O_RDONLY);
+    int fd_write = open("fifo_s_to_p_init", O_WRONLY);
+    while(listening_join_routine_not_terminated)
+    {
+        int player_pid;
+        read(fd_read, &player_pid, sizeof(int));
+
+
+        pthread_mutex_lock(&mutex_player_manag);
+        if (playerManager.cur_size < 4)
+        {
+            int acc_var = 123;
+            write(fd_write, &acc_var ,sizeof(int ));
+            playerManager.cur_size = playerManager.cur_size + 1;
+            int i;
+            for (i = 0; i < 4; i++)
+            {
+                if (playerManager.players[i].is_free == true)
+                {
+                    break;
+                }
+            }
+            //cppcheck bothered me about this
+            if(i == 4) i--;
+
+            playerManager.players[i].serv_to_p_fd = open(playerManager.players[i].serv_to_p_fifo_name, O_WRONLY);
+            playerManager.players[i].p_to_serv_fd = open(playerManager.players[i].p_to_serv_fifo_name, O_RDONLY);
+            playerManager.players[i].process_id = getpid();
+            playerManager.players[i].is_free = false;
+            write(fd_write, &playerManager.players[i] ,sizeof(server_side_player_t));
+            playerManager.players[i].process_id = player_pid;
+
+
+        }
+        else
+        {
+            int rej_var = 234;
+            write(fd_write, &rej_var, sizeof(int));
+        }
+        pthread_mutex_unlock(&mutex_player_manag);
+
+
+    }
+    close(fd_write);
+    close(fd_read);
+    return NULL;
+}
+
+void * listening_disconnect_routine(void * params)
+{
+    while(disconnect_routine_not_terminated)
+    {
+        pthread_mutex_lock(&mutex_player_manag);
+
+        for(int i = 0; i < 4; i++)
+        {
+            if( playerManager.players[i].is_free == false)
+            { // checking if the process is still alive
+                int err = kill(playerManager.players[i].process_id, 0);
+                if(err == -1 && errno == ESRCH) //process doesnt exist
+                {
+                    playerManager.players[i].is_free = true;
+                    playerManager.cur_size--;
+                }
+            }
+        }
+        pthread_mutex_unlock(&mutex_player_manag);
+        usleep(500 * 1000);
+    }
+    return NULL;
+}
+
+void player_manager_init()
+{
+    for(int i = 0; i < 4; i++)
+    {
+        playerManager.players[i].is_free = true;
+        playerManager.players[i].player_num = i;
+
+        switch (i)
+        {
+            case 1:
+            {
+                strcpy(playerManager.players[i].p_to_serv_fifo_name, "fifo_p_to_s1");
+                strcpy(playerManager.players[i].serv_to_p_fifo_name, "fifo_s_to_p1");
+                break;
+            }
+            case 2:
+            {
+                strcpy(playerManager.players[i].p_to_serv_fifo_name, "fifo_p_to_s2");
+                strcpy(playerManager.players[i].serv_to_p_fifo_name, "fifo_s_to_p2");
+                break;
+            }
+            case 3:
+            {
+                strcpy(playerManager.players[i].p_to_serv_fifo_name, "fifo_p_to_s3");
+                strcpy(playerManager.players[i].serv_to_p_fifo_name, "fifo_s_to_p3");
+                break;
+            }
+            case 4:
+            {
+                strcpy(playerManager.players[i].p_to_serv_fifo_name, "fifo_p_to_s4");
+                strcpy(playerManager.players[i].serv_to_p_fifo_name, "fifo_s_to_p4");
+                break;
+            }
+            default:
+                break;
+        }
+    }
+}
+
+void player_send_map_dimensions(int which_player)
+{
+    pthread_mutex_lock(&mutex_player_manag);
+    int buf = MAP_WIDTH;
+    write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int) );
+    if(buf < 0 || buf > 128) {
+        return;
+    }
+
+    buf = MAP_LENGTH;
+    write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int) );
+    if(buf < 0 || buf > 128) {
+        return;
+    }
+    pthread_mutex_unlock(&mutex_player_manag);
+}
+void player_send_map_update(map_point_t map[], int which_player, point_t curr_location)
+{
+    map_point_t buf[25];
+    int array_cnt = 0;
+    for(int i = -2; i < 3; i++) {
+        if ((int) curr_location.y + i >= 0 && (int) curr_location.y + i <= 32) {
+            for (int j = -2; j < 3; j++) {
+                if ((int) curr_location.x + j >= 0 && (int) curr_location.x + j <= 32)
+                {
+                    if ((int) curr_location.x + i == 32 || (int) curr_location.y + j == 32)
+                    {
+                        buf[array_cnt].point.y = 999;
+                        buf[array_cnt].point.x = 999;
+                        array_cnt++;
+                    } else {
+                        buf[array_cnt] = map[curr_location.y * MAP_WIDTH + curr_location.x];
+                        array_cnt++;
+                    }
+                }
+            }
+        }
+    }
+
+    pthread_mutex_lock(&mutex_player_manag);
+    write(playerManager.players[which_player].serv_to_p_fd, buf, sizeof(buf));
+    pthread_mutex_unlock(&mutex_player_manag);
+}
+
+void player_send_serverside_stats(int which_player, int carried, int brought)
+{
+    pthread_mutex_lock( &mutex_player_manag);
+
+    write(playerManager.players[which_player].serv_to_p_fd, &brought, sizeof(int) );
+
+    write(playerManager.players[which_player].serv_to_p_fd, &carried, sizeof(int) );
+    pthread_mutex_unlock(&mutex_player_manag);
+}
+void player_receive_move(int which_player)
+{
+    point_t new_loc;
+    pthread_mutex_lock(&mutex_player_manag);
+    read(playerManager.players[which_player].p_to_serv_fd, &new_loc, sizeof(point_t));
+    pthread_mutex_unlock(&mutex_player_manag);
+
+}
+
+void player_send_spawn(map_point_t * map, int map_width, int map_length, int which_player)
+{
+
+    int baseline_x = map_length / 4;
+    int baseline_y = map_width / 4;
+
+    int spawn_loc_x;
+    int spawn_loc_y;
+    while(1)
+    {
+        spawn_loc_x = baseline_x + rand() % (map_length / 2);
+        spawn_loc_y = baseline_y + rand() % (map_width / 2);
+
+        if (map[spawn_loc_y * map_width + spawn_loc_x].point_display_entity == ENTITY_FREE)
+            break;
+    }
+
+
+    point_t temp = {.x = (unsigned) spawn_loc_x, .y = (unsigned) spawn_loc_y};
+    pthread_mutex_lock(&mutex_player_manag);
+    write(playerManager.players[which_player].serv_to_p_fd, &temp, sizeof(temp));
+    pthread_mutex_unlock(&mutex_player_manag);
+
+}
+
 // Function that initializes the beastManager variable
 int beast_spawn_init(map_point_t map[])
 {
@@ -282,7 +557,7 @@ int spawn_beast(beast_tracker_t * beast_tracker)
 }
 int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t * beast)
 {
-    //TODO Player collision, beast_spawner_occupation
+    //TODO Player collision, Player chasing, fixing the rand check so that the beast doesnt move
     //error checking
     if( beast->point_display_entity != ENTITY_BEAST) {
         return -1;

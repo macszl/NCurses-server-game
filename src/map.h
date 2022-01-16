@@ -2,10 +2,12 @@
 // Created by maciek on 1/7/22.
 //
 
-#include <ncurses.h>
+
 
 #ifndef NCURSES_SERVER_GAME_MAP_H
 #define NCURSES_SERVER_GAME_MAP_H
+
+#include <ncurses.h>
 
 typedef enum entity_t
 {
@@ -53,8 +55,10 @@ struct entity_ncurses_attributes_t
     int color_p; // which color pair is assigned to the given entity
 };
 int map_init(map_point_t map[], int MAP_WIDTH, int MAP_LENGTH);
+int map_place_fow_player(map_point_t map[], const int MAP_WIDTH, const int MAP_LENGTH);
 void ncurses_funcs_init();
 void attribute_list_init();
 int render_map(map_point_t map[], WINDOW * window, int MAP_WIDTH, int MAP_LENGTH);
-void stat_window_display(WINDOW * window, int pid, int turn_cnt);
+void stat_window_display_server(WINDOW * window, int pid, int turn_cnt);
+void stat_window_display_player(WINDOW * window, int pid, int turn_cnt);
 #endif //NCURSES_SERVER_GAME_MAP_H

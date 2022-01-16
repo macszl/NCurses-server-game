@@ -5,7 +5,7 @@ DEBUG = -g
 NOLINK = -c
 CCFLAGS = -Wall -pedantic -Wextra -Wfloat-equal -Wundef \
 		  -Wshadow -Wpointer-arith -Wcast-align -Wconversion \
-		  -Wswitch-default -Wcast-qual -Wwrite-strings -Waggregate-return -std=c11
+		  -Wswitch-default -Wcast-qual -Wwrite-strings -Waggregate-return -std=gnu11
 
 .PHONY: all
 
@@ -19,14 +19,14 @@ $(SRC):
 	mkdir -p $(SRC)
 
 # Dynamic linking with ncurses
-server: $(OBJ)/main.o $(OBJ)/map.o
+server: $(OBJ)/main.o $(OBJ)/map.o $(OBJ)/fifohelper.o
 	$(CC) $(DEBUG) $(CCFLAGS) $^ -o $@ -lncurses -lpthread
 
-player: $(OBJ)/player.o $(OBJ)/map.o
+player: $(OBJ)/player.o $(OBJ)/map.o $(OBJ)/fifohelper.o
 	$(CC) $(DEBUG) $(CCFLAGS) $^ -o $@ -lncurses -lpthread
 
 # .O files with debugging symbols
-$(OBJ)/main.o: $(SRC)/main.c
+$(OBJ)/main.o: $(SRC)/main.c $(SRC)/fifohelper.h
 	$(CC) $(DEBUG) $(NOLINK) $(CCFLAGS) $< -o $@
 
 $(OBJ)/map.o: $(SRC)/map.c $(SRC)/map.h
@@ -35,7 +35,10 @@ $(OBJ)/map.o: $(SRC)/map.c $(SRC)/map.h
 $(OBJ)/player.o: $(SRC)/player.c $(SRC)/player.h
 	$(CC) $(DEBUG) $(NOLINK) $(CCFLAGS) $< -o $@
 
+$(OBJ)/fifohelper.o: $(SRC)/fifohelper.c $(SRC)/fifohelper.h
+	$(CC) $(DEBUG) $(NOLINK) $(CCFLAGS) $< -o $@
+
 .PHONY: clean
 
 clean:
-	-rm server $(OBJ)/*.o
+	-rm server player $(OBJ)/*.o
