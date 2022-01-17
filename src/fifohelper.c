@@ -61,18 +61,18 @@ int make_fifos()
 }
 int unlink_fifos()
 {
-    unlink("fifo_s_to_p_init");
-    unlink("fifo_p_to_s_init");
+    if (unlink("fifo_s_to_p_init") == -1) return -1;
+    if (unlink("fifo_p_to_s_init") == -1) return -1;
 
-    unlink("fifo_p_to_s1");
-    unlink("fifo_p_to_s2");
-    unlink("fifo_p_to_s3");
-    unlink("fifo_p_to_s4");
+    if (unlink("fifo_p_to_s1") == -1) return -1;
+    if (unlink("fifo_p_to_s2") == -1) return -1;
+    if (unlink("fifo_p_to_s3") == -1) return -1;
+    if (unlink("fifo_p_to_s4") == -1) return -1;
 
-    unlink("fifo_s_to_p1");
-    unlink("fifo_s_to_p2");
-    unlink("fifo_s_to_p3");
-    unlink("fifo_s_to_p4");
+    if (unlink("fifo_s_to_p1") == -1) return -1;
+    if (unlink("fifo_s_to_p2") == -1) return -1;
+    if (unlink("fifo_s_to_p3") == -1) return -1;
+    if (unlink("fifo_s_to_p4") == -1) return -1;
 
     return 0;
 }

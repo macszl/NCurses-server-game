@@ -22,11 +22,17 @@ int main() {
     read(fd_read, &response, sizeof(int) );
     if(response == 234)
     {
+        printf("Server is full... Leaving.\n");
         return 0;
     }
 
     server_info_t temp;
-    read(fd_read, &temp, sizeof(server_info_t));
+    int err = read(fd_read, &temp, sizeof(server_info_t));
+    if(err == -1 || temp.p_to_serv_fifo_name[0] == 0)
+    {
+        printf("Error reading server info... Quitting.\n");
+        return -1;
+    }
 
     close(fd_read);
     close(fd_write);
@@ -36,8 +42,17 @@ int main() {
     entity_t player_num = (unsigned int) ENTITY_PLAYER_1 + (unsigned int) temp.player_num;
 
     fd_read = open(temp.serv_to_p_fifo_name, O_RDONLY);
+    if(fd_read == -1)
+    {
+        printf("Failed to open server to player FIFO... Leaving.\n");
+        return -1;
+    }
     fd_write = open(temp.p_to_serv_fifo_name, O_WRONLY);
-
+    if(fd_write == -1)
+    {
+        printf("Failed to open player to server FIFO... Leaving.\n");
+        return -1;
+    }
 
     int map_length;
     int map_width;
@@ -45,8 +60,17 @@ int main() {
 
     server_receive_map_dimensions(&map_width, &map_length, fd_read);
 
+    if(map_width != 32 || map_length != 32)
+    {
+        printf("Wrong map dimension data received... Leaving\n");
+        return -1;
+    }
     map_point_t * map = malloc(sizeof(map_point_t) * map_width * map_length);
-
+    if(map == NULL)
+    {
+        printf("Failed to allocate memory\n");
+        return -1;
+    }
     map_place_fow_player(map, map_width, map_length);
 
     ncurses_funcs_init();
@@ -63,21 +87,22 @@ int main() {
     while(!PLAYER_QUIT)
     {
         map_place_fow_player(map, map_width, map_length);
+        server_receive_serverside_stats(&stats, fd_read);
+        server_receive_map_update(map, fd_read, map_width, map_length);
+        render_map(map, game_window, map_width, map_length);
+        stat_window_display_player(stats_window, serv_process_id, carried, brought);
+        wrefresh(game_window);
+        wrefresh(stats_window);
         if(CPU_MODE == false)
         {
-            server_receive_serverside_stats(&stats, fd_read);
-            server_receive_map_update(map, fd_read, map_width, map_length);
             c = getch();
             handle_event(c, map, &player, map_width);
-            server_send_move(player, fd_write);
         }
         else
         {
-            server_receive_serverside_stats(&stats, fd_read);
-            server_receive_map_update(map, fd_read, map_width, map_length);
             handle_event(CPU_INPUT, map, &player, map_width);
-            server_send_move(player, fd_write);
         }
+        server_send_move(player, fd_write);
     }
     close(fd_write);
     close(fd_read);
@@ -193,10 +218,10 @@ void server_receive_map_dimensions(int * map_width_p, int * map_length_p, int fd
 }
 void server_receive_map_update(map_point_t * map, int fd_read, int map_width, int map_length)
 {
-    map_point_t map_fragment[25];
-    read(fd_read, map_fragment, sizeof(map_fragment));
+    map_point_t map_fragment[26];
+    read(fd_read, map_fragment, sizeof(map_point_t) * 26);
 
-    for(int i = 0; i < 25; i++)
+    for(int i = 0; i < 26; i++)
     {
         unsigned int x = map_fragment[i].point.x;
         unsigned int y = map_fragment[i].point.y;
@@ -212,6 +237,7 @@ void server_receive_spawn(player_t * player, map_point_t * map, int fd_read, int
     read(fd_read, &buf, sizeof(point_t));
     player->player = &map[buf.y * map_width + buf.x];
     player->spawn = &map[buf.y * map_width + buf.x];
+
 }
 void server_receive_serverside_stats(stats_t * stats_p, int fd_read)
 {

@@ -68,6 +68,7 @@ typedef struct beast_spawn_manager_t
 //TODO THEORETICAL SERVER STUFF: STRUCT
 typedef struct server_side_player_t
 {
+    point_t curr_location;
     char serv_to_p_fifo_name[20];
     char p_to_serv_fifo_name[20];
     int p_to_serv_fd;
@@ -76,7 +77,7 @@ typedef struct server_side_player_t
     int process_id;
     bool is_free;
     int carried;
-    int brought
+    int brought;
 } server_side_player_t;
 
 typedef struct player_manager_t
@@ -96,11 +97,11 @@ int handle_beasts(map_point_t map[], beast_tracker_t * beast_tracker);
 
 //PLAYER STUFF
 void player_manager_init();
-void player_send_map_dimensions(int which_player);
+void player_send_map_dimensions_internal(int which_player);
 void player_send_map_update(map_point_t map[], int which_player, point_t curr_location);
 void player_send_serverside_stats(int which_player, int carried, int brought);
-void player_send_spawn(map_point_t * map, int map_width, int map_length, int which_player);
-void player_receive_move(int which_player);
+void player_send_spawn_internal(map_point_t * map, int map_width, int map_length, int which_player);
+void player_receive_move(map_point_t map[],int which_player);
 
 
 void handle_event(int c, map_point_t map[], beast_tracker_t * beast_tracker);
@@ -161,7 +162,7 @@ int main() {
     pthread_create(&thread1, NULL, input_routine, &input);
 #endif
     pthread_t thread2;
-    pthread_create(&thread2, NULL, listening_join_routine, NULL);
+    pthread_create(&thread2, NULL, listening_join_routine, map);
     pthread_t thread3;
     pthread_create(&thread3, NULL, listening_disconnect_routine, NULL);
     //MULTITHREADED_INPUT loop
@@ -176,36 +177,41 @@ int main() {
             sem_post(&input_found_blockade);
             break;
         }
+        pthread_mutex_unlock(&mutex_input);
+
+        pthread_mutex_lock(&mutex_input);
         if(input != NO_INPUT)
         {
             handle_event(input, map, &beast_tracker);
-
+            pthread_mutex_unlock(&mutex_input);
             sem_post(&input_found_blockade);
-
-            handle_beasts(map, &beast_tracker);
-
-            render_map(map, game_window, MAP_WIDTH, MAP_LENGTH);
-            stat_window_display_server(stats_window, server_pid, turn_counter);
-            turn_counter++;
-
-            wrefresh(game_window);
-            wrefresh(stats_window);
-            usleep(2000 * 1000);
-            continue;
         }
         else
         {
-            handle_beasts(map, &beast_tracker);
-
-            render_map(map, game_window, MAP_WIDTH, MAP_LENGTH);
-            stat_window_display_server(stats_window, server_pid, turn_counter);
-
-            wrefresh(game_window);
-            wrefresh(stats_window);
-            turn_counter++;
-            usleep(2000 * 1000);
+            pthread_mutex_unlock(&mutex_input);
         }
-        pthread_mutex_unlock(&mutex_input);
+
+        handle_beasts(map, &beast_tracker);
+
+        //handle_players
+        for(int i = 0; i < 4; i++)
+        {
+            if( playerManager.players[i].is_free == false)
+            {// each one of these functions is thread safe
+                player_send_serverside_stats(i, playerManager.players[i].carried, playerManager.players[i].brought);
+                player_send_map_update(map, i, playerManager.players[i].curr_location);
+                player_receive_move(map, i);
+            }
+        }
+
+        render_map(map, game_window, MAP_WIDTH, MAP_LENGTH);
+        stat_window_display_server(stats_window, server_pid, turn_counter);
+
+        wrefresh(game_window);
+        wrefresh(stats_window);
+        turn_counter++;
+        usleep(1000 * 1000);
+
     }
 #else
     //singlethreaded mode: made for the ease of debugging
@@ -228,15 +234,16 @@ int main() {
 
     listening_join_routine_not_terminated = false;
     disconnect_routine_not_terminated = false;
+    err = unlink_fifos();
+    if(err == -1) printf("%s\n", strerror(errno));
+
     pthread_join(thread2, NULL);
     pthread_join(thread3, NULL);
-    unlink_fifos();
-
-    pthread_mutex_destroy(&mutex_player_manag);
-
 #if MULTITHREADED_INPUT
     pthread_join(thread1, NULL);
+
     pthread_mutex_destroy(&mutex_input);
+    pthread_mutex_destroy(&mutex_player_manag);
     sem_destroy(&input_found_blockade);
 #endif
     return 0;
@@ -293,6 +300,7 @@ void *input_routine(void *input_storage) {
         pthread_mutex_lock(&mutex_input);
         *(int *) input_storage = NO_INPUT;
         pthread_mutex_unlock(&mutex_input);
+
         char c = (char) getch();
         flushinp();
         if( c != NO_INPUT) {
@@ -313,51 +321,74 @@ void *input_routine(void *input_storage) {
 
 void *listening_join_routine(void * param)
 {
-    int fd_read = open("fifo_p_to_s_init", O_RDONLY);
-    int fd_write = open("fifo_s_to_p_init", O_WRONLY);
+    map_point_t * map = (map_point_t *) param;
     while(listening_join_routine_not_terminated)
     {
+        int fd_read = open("fifo_p_to_s_init", O_RDONLY | O_NONBLOCK);
+        int fd_write = open("fifo_s_to_p_init", O_WRONLY | O_NONBLOCK);
         int player_pid;
-        read(fd_read, &player_pid, sizeof(int));
 
+        if( fd_write != -1 && fd_read != -1 ) {
+            int error_var = read(fd_read, &player_pid, sizeof(int));
+            if(error_var != sizeof(int))
+            {   //for debug purposes
 
-        pthread_mutex_lock(&mutex_player_manag);
-        if (playerManager.cur_size < 4)
-        {
-            int acc_var = 123;
-            write(fd_write, &acc_var ,sizeof(int ));
-            playerManager.cur_size = playerManager.cur_size + 1;
-            int i;
-            for (i = 0; i < 4; i++)
-            {
-                if (playerManager.players[i].is_free == true)
-                {
-                    break;
+            }
+
+            pthread_mutex_lock(&mutex_player_manag);
+            if (playerManager.cur_size < 4) {
+                pthread_mutex_unlock(&mutex_player_manag);
+
+                pthread_mutex_lock(&mutex_player_manag);
+                int acc_var = 123;
+                error_var= write(fd_write, &acc_var, sizeof(int));
+                if(error_var == sizeof(int ))
+                {   //for debug purposes
+
+                }
+                playerManager.cur_size = playerManager.cur_size + 1;
+                int i;
+                for (i = 0; i < 4; i++) {
+                    if (playerManager.players[i].is_free == true) {
+                        break;
+                    }
+                }
+                //cppcheck bothered me about this
+                if (i == 4) i--;
+
+                playerManager.players[i].process_id = getpid();
+                playerManager.players[i].is_free = false;
+                error_var = write(fd_write, &playerManager.players[i], sizeof(server_side_player_t));
+                if(error_var == sizeof(server_side_player_t))
+                {   //for debug purposes
+
+                }
+
+                int new_fd_write = open(playerManager.players[i].serv_to_p_fifo_name, O_WRONLY);
+                int new_fd_read = open(playerManager.players[i].p_to_serv_fifo_name, O_RDONLY);
+                playerManager.players[i].serv_to_p_fd = new_fd_write;
+                playerManager.players[i].p_to_serv_fd = new_fd_read;
+                playerManager.players[i].process_id = player_pid;
+
+                player_send_map_dimensions_internal(i);
+                player_send_spawn_internal(map, MAP_WIDTH, MAP_LENGTH, i);
+                pthread_mutex_unlock(&mutex_player_manag);
+            } else {
+
+                pthread_mutex_unlock(&mutex_player_manag);
+                int rej_var = 234;
+                error_var = write(fd_write, &rej_var, sizeof(int));
+                if(error_var == sizeof(int ))
+                {   //for debug purposes
+
                 }
             }
-            //cppcheck bothered me about this
-            if(i == 4) i--;
 
-            playerManager.players[i].serv_to_p_fd = open(playerManager.players[i].serv_to_p_fifo_name, O_WRONLY);
-            playerManager.players[i].p_to_serv_fd = open(playerManager.players[i].p_to_serv_fifo_name, O_RDONLY);
-            playerManager.players[i].process_id = getpid();
-            playerManager.players[i].is_free = false;
-            write(fd_write, &playerManager.players[i] ,sizeof(server_side_player_t));
-            playerManager.players[i].process_id = player_pid;
-
-
+            close(fd_write);
+            close(fd_read);
         }
-        else
-        {
-            int rej_var = 234;
-            write(fd_write, &rej_var, sizeof(int));
-        }
-        pthread_mutex_unlock(&mutex_player_manag);
-
-
+        usleep(250 * 1000);
     }
-    close(fd_write);
-    close(fd_read);
     return NULL;
 }
 
@@ -394,25 +425,25 @@ void player_manager_init()
 
         switch (i)
         {
-            case 1:
+            case 0:
             {
                 strcpy(playerManager.players[i].p_to_serv_fifo_name, "fifo_p_to_s1");
                 strcpy(playerManager.players[i].serv_to_p_fifo_name, "fifo_s_to_p1");
                 break;
             }
-            case 2:
+            case 1:
             {
                 strcpy(playerManager.players[i].p_to_serv_fifo_name, "fifo_p_to_s2");
                 strcpy(playerManager.players[i].serv_to_p_fifo_name, "fifo_s_to_p2");
                 break;
             }
-            case 3:
+            case 2:
             {
                 strcpy(playerManager.players[i].p_to_serv_fifo_name, "fifo_p_to_s3");
                 strcpy(playerManager.players[i].serv_to_p_fifo_name, "fifo_s_to_p3");
                 break;
             }
-            case 4:
+            case 3:
             {
                 strcpy(playerManager.players[i].p_to_serv_fifo_name, "fifo_p_to_s4");
                 strcpy(playerManager.players[i].serv_to_p_fifo_name, "fifo_s_to_p4");
@@ -424,9 +455,10 @@ void player_manager_init()
     }
 }
 
-void player_send_map_dimensions(int which_player)
+void player_send_map_dimensions_internal(int which_player)
 {
-    pthread_mutex_lock(&mutex_player_manag);
+    // as this function is internal, they dont need mutexes, to lock shared resources.
+    // the calling function does need them, however.
     int buf = MAP_WIDTH;
     write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int) );
     if(buf < 0 || buf > 128) {
@@ -438,33 +470,34 @@ void player_send_map_dimensions(int which_player)
     if(buf < 0 || buf > 128) {
         return;
     }
-    pthread_mutex_unlock(&mutex_player_manag);
 }
 void player_send_map_update(map_point_t map[], int which_player, point_t curr_location)
 {
-    map_point_t buf[25];
+    map_point_t buf[26];
     int array_cnt = 0;
     for(int i = -2; i < 3; i++) {
-        if ((int) curr_location.y + i >= 0 && (int) curr_location.y + i <= 32) {
+        if ((int) curr_location.y + i >= 0 && (int) curr_location.y + i <= MAP_WIDTH) {
             for (int j = -2; j < 3; j++) {
-                if ((int) curr_location.x + j >= 0 && (int) curr_location.x + j <= 32)
+                if ((int) curr_location.x + j >= 0 && (int) curr_location.x + j <= MAP_LENGTH)
                 {
-                    if ((int) curr_location.x + i == 32 || (int) curr_location.y + j == 32)
+                    if ((int) curr_location.x + i == MAP_LENGTH || (int) curr_location.y + j == MAP_WIDTH)
                     {
                         buf[array_cnt].point.y = 999;
                         buf[array_cnt].point.x = 999;
                         array_cnt++;
                     } else {
-                        buf[array_cnt] = map[curr_location.y * MAP_WIDTH + curr_location.x];
+                        buf[array_cnt] = map[(curr_location.y + i )* MAP_WIDTH + curr_location.x + j];
                         array_cnt++;
                     }
                 }
             }
         }
     }
+    buf[array_cnt].point.y = 999;
+    buf[array_cnt].point.x = 999;
 
     pthread_mutex_lock(&mutex_player_manag);
-    write(playerManager.players[which_player].serv_to_p_fd, buf, sizeof(buf));
+    write(playerManager.players[which_player].serv_to_p_fd, buf, sizeof(map_point_t) * 26);
     pthread_mutex_unlock(&mutex_player_manag);
 }
 
@@ -477,18 +510,26 @@ void player_send_serverside_stats(int which_player, int carried, int brought)
     write(playerManager.players[which_player].serv_to_p_fd, &carried, sizeof(int) );
     pthread_mutex_unlock(&mutex_player_manag);
 }
-void player_receive_move(int which_player)
+void player_receive_move(map_point_t map[], int which_player)
 {
     point_t new_loc;
     pthread_mutex_lock(&mutex_player_manag);
     read(playerManager.players[which_player].p_to_serv_fd, &new_loc, sizeof(point_t));
     pthread_mutex_unlock(&mutex_player_manag);
 
+    //validation
+    if( map[new_loc.y * MAP_WIDTH + new_loc.x].point_display_entity == ENTITY_WALL)
+        return;
+
+    pthread_mutex_lock(&mutex_player_manag);
+    playerManager.players[which_player].curr_location = new_loc;
+    pthread_mutex_unlock(&mutex_player_manag);
 }
 
-void player_send_spawn(map_point_t * map, int map_width, int map_length, int which_player)
+void player_send_spawn_internal(map_point_t * map, int map_width, int map_length, int which_player)
 {
-
+    // as this function is internal, they dont need mutexes, to lock shared resources.
+    // the calling function does need them, however.
     int baseline_x = map_length / 4;
     int baseline_y = map_width / 4;
 
@@ -505,9 +546,9 @@ void player_send_spawn(map_point_t * map, int map_width, int map_length, int whi
 
 
     point_t temp = {.x = (unsigned) spawn_loc_x, .y = (unsigned) spawn_loc_y};
-    pthread_mutex_lock(&mutex_player_manag);
     write(playerManager.players[which_player].serv_to_p_fd, &temp, sizeof(temp));
-    pthread_mutex_unlock(&mutex_player_manag);
+//    playerManager.players[which_player].curr_location.y = (unsigned) spawn_loc_y;
+//    playerManager.players[which_player].curr_location.x = (unsigned) spawn_loc_x;
 
 }
 

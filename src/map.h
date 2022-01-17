@@ -60,5 +60,5 @@ void ncurses_funcs_init();
 void attribute_list_init();
 int render_map(map_point_t map[], WINDOW * window, int MAP_WIDTH, int MAP_LENGTH);
 void stat_window_display_server(WINDOW * window, int pid, int turn_cnt);
-void stat_window_display_player(WINDOW * window, int pid, int turn_cnt);
+void stat_window_display_player(WINDOW * window, int pid, int carried, int brought);
 #endif //NCURSES_SERVER_GAME_MAP_H

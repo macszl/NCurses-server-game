@@ -34,6 +34,7 @@ typedef struct stats_t {
 } stats_t;
 typedef struct server_info_t
 {
+    point_t curr_location;
     char serv_to_p_fifo_name[20];
     char p_to_serv_fifo_name[20];
     int p_to_serv_fd;
