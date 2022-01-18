@@ -102,7 +102,7 @@ void player_send_map_dimensions_internal(int which_player);
 int player_send_map_update(map_point_t map[], int which_player, point_t curr_location);
 void player_send_serverside_stats(int which_player, int carried, int brought);
 void player_send_spawn_internal(map_point_t * map, int map_width, int map_length, int which_player);
-void player_receive_move(map_point_t map[],int which_player);
+void player_receive_move(map_point_t map[],int which_player, int map_width);
 void player_send_turn(int turn_counter, int which_player);
 
 void handle_event(int c, map_point_t map[], beast_tracker_t * beast_tracker);
@@ -201,7 +201,7 @@ int main() {
             {// each one of these functions is thread safe
                 player_send_serverside_stats(i, playerManager.players[i].carried, playerManager.players[i].brought);
                 player_send_map_update(map, i, playerManager.players[i].curr_location);
-                player_receive_move(map, i);
+                player_receive_move(map, i, MAP_WIDTH);
             }
         }
 
@@ -216,7 +216,7 @@ int main() {
         {
             if( playerManager.players[i].is_free == false)
             {// each one of these functions is thread safe
-                player_send_turn(i, turn_counter);
+                player_send_turn(turn_counter, i);
             }
         }
     }
@@ -336,10 +336,9 @@ void *listening_join_routine(void * param)
         int player_pid;
 
         if( fd_write != -1 && fd_read != -1 ) {
-            int error_var = read(fd_read, &player_pid, sizeof(int));
-            if(error_var != sizeof(int))
-            {   //for debug purposes
-
+            int errs = 0;
+            if ( read(fd_read, &player_pid, sizeof(int)) != sizeof(int)) {
+                errs++;
             }
 
             pthread_mutex_lock(&mutex_player_manag);
@@ -348,10 +347,9 @@ void *listening_join_routine(void * param)
 
                 pthread_mutex_lock(&mutex_player_manag);
                 int acc_var = 123;
-                error_var= write(fd_write, &acc_var, sizeof(int));
-                if(error_var == sizeof(int ))
+                if( write(fd_write, &acc_var, sizeof(int) ) != sizeof(int ))
                 {   //for debug purposes
-
+                    errs++;
                 }
                 playerManager.cur_size = playerManager.cur_size + 1;
                 int i;
@@ -365,10 +363,9 @@ void *listening_join_routine(void * param)
 
                 playerManager.players[i].process_id = getpid();
                 playerManager.players[i].is_free = false;
-                error_var = write(fd_write, &playerManager.players[i], sizeof(server_side_player_t));
-                if(error_var == sizeof(server_side_player_t))
+                if(write(fd_write, &playerManager.players[i], sizeof(server_side_player_t)) == sizeof(server_side_player_t))
                 {   //for debug purposes
-
+                    errs++;
                 }
 
                 int new_fd_write = open(playerManager.players[i].serv_to_p_fifo_name, O_WRONLY);
@@ -384,10 +381,9 @@ void *listening_join_routine(void * param)
 
                 pthread_mutex_unlock(&mutex_player_manag);
                 int rej_var = 234;
-                error_var = write(fd_write, &rej_var, sizeof(int));
-                if(error_var == sizeof(int ))
+                if(write(fd_write, &rej_var, sizeof(int)) == sizeof(int ))
                 {   //for debug purposes
-
+                    errs++;
                 }
             }
 
@@ -467,13 +463,22 @@ void player_send_map_dimensions_internal(int which_player)
     // as this function is internal, they dont need mutexes, to lock shared resources.
     // the calling function does need them, however.
     int buf = MAP_WIDTH;
-    write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int) );
+    int err;
+    err = write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int) );
+    if( err != sizeof(int))
+    {
+        return;
+    }
     if(buf < 0 || buf > 128) {
         return;
     }
 
     buf = MAP_LENGTH;
-    write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int) );
+    err = write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int) );
+    if( err != sizeof(int))
+    {
+        return;
+    }
     if(buf < 0 || buf > 128) {
         return;
     }
@@ -517,7 +522,14 @@ int player_send_map_update(map_point_t map[], int which_player, point_t curr_loc
         }
     }
     pthread_mutex_lock(&mutex_player_manag);
-    write(playerManager.players[which_player].serv_to_p_fd, map_fragment, sizeof(map_point_t) * map_fragment_size);
+    int err;
+    for(int i = 0; i < map_fragment_size; i++)
+    err = write(playerManager.players[which_player].serv_to_p_fd, &map_fragment[i], sizeof(map_point_t) * map_fragment_size);
+    if( err != sizeof(map_point_t) * map_fragment_size)
+    {
+        pthread_mutex_unlock(&mutex_player_manag);
+        return -1;
+    }
     pthread_mutex_unlock(&mutex_player_manag);
     return 0;
 }
@@ -525,25 +537,48 @@ int player_send_map_update(map_point_t map[], int which_player, point_t curr_loc
 void player_send_serverside_stats(int which_player, int carried, int brought)
 {
     pthread_mutex_lock( &mutex_player_manag);
+    int err = write(playerManager.players[which_player].serv_to_p_fd, &brought, sizeof(int));
+    if(err != sizeof(int))
+    {
+        pthread_mutex_unlock(&mutex_player_manag);
+        return;
+    }
 
-    write(playerManager.players[which_player].serv_to_p_fd, &brought, sizeof(int) );
-
-    write(playerManager.players[which_player].serv_to_p_fd, &carried, sizeof(int) );
+    err = write(playerManager.players[which_player].serv_to_p_fd, &carried, sizeof(int) );
+    if(err != sizeof(int))
+    {
+        pthread_mutex_unlock(&mutex_player_manag);
+        return;
+    }
     pthread_mutex_unlock(&mutex_player_manag);
 }
-void player_receive_move(map_point_t map[], int which_player)
+void player_receive_move(map_point_t map[], int which_player, int map_width)
 {
     point_t new_loc;
     pthread_mutex_lock(&mutex_player_manag);
-    read(playerManager.players[which_player].p_to_serv_fd, &new_loc, sizeof(point_t));
+    int err = read(playerManager.players[which_player].p_to_serv_fd, &new_loc, sizeof(point_t));
+    if ( err != sizeof(point_t)) {
+        pthread_mutex_unlock(&mutex_player_manag);
+        return;
+    }
     pthread_mutex_unlock(&mutex_player_manag);
 
-    //validation
+    //
+    if(new_loc.y > MAP_WIDTH || new_loc.x > MAP_LENGTH){
+        return;
+    }
     if( map[new_loc.y * MAP_WIDTH + new_loc.x].point_display_entity == ENTITY_WALL)
         return;
 
     pthread_mutex_lock(&mutex_player_manag);
+    int old_x = playerManager.players[which_player].curr_location.x;
+    int old_y = playerManager.players[which_player].curr_location.y;
+
+    map[old_y * map_width + old_x].point_display_entity = map[old_x * map_width + old_x].point_terrain_entity;
     playerManager.players[which_player].curr_location = new_loc;
+    entity_t player_num = attribute_list[which_player + 5].entity;
+    map[new_loc.y * map_width + new_loc.x].point_display_entity = player_num;
+
     pthread_mutex_unlock(&mutex_player_manag);
 }
 
@@ -568,19 +603,31 @@ void player_send_spawn_internal(map_point_t * map, int map_width, int map_length
 
     entity_t plr = attribute_list[which_player + 5].entity;
     map_point_t temp = { .point.x = (unsigned) spawn_loc_x, .point.y = (unsigned) spawn_loc_y,
-                         .point_display_entity = plr, .point_terrain_entity = ENTITY_FREE};
-    write(playerManager.players[which_player].serv_to_p_fd, &temp, sizeof(temp));
+                         .point_display_entity = plr, .point_terrain_entity = ENTITY_FREE, .spawnerType = NO_SPAWNER};
+    int err = write(playerManager.players[which_player].serv_to_p_fd, &temp, sizeof(temp));
+    if(err != sizeof(temp))
+    {
+        return;
+    }
     playerManager.players[which_player].curr_location.y = (unsigned) spawn_loc_y;
     playerManager.players[which_player].curr_location.x = (unsigned) spawn_loc_x;
     playerManager.players[which_player].spawn_location.y = (unsigned) spawn_loc_y;
     playerManager.players[which_player].spawn_location.x = (unsigned) spawn_loc_x;
+    map[spawn_loc_y * map_width + spawn_loc_x].point_display_entity = temp.point_display_entity;
 }
 
 void player_send_turn(int turn_counter, int which_player)
 {
     int buf = turn_counter;
     pthread_mutex_lock(&mutex_player_manag);
-    write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int ));
+    int err;
+    err = write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int ));
+    if(err != sizeof(int ))
+    {
+        fprintf(stderr, "Runtime error: %s returned -1 at %s:%d", strerror(errno),__FILE__, __LINE__);
+        pthread_mutex_unlock(&mutex_player_manag);
+        return;
+    }
     pthread_mutex_unlock(&mutex_player_manag);
 }
 

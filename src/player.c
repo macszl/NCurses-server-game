@@ -93,9 +93,10 @@ int main() {
 
     stats_t stats;
     player_t player;
-    CHECK (server_receive_spawn(&player, map,fd_read, map_width, map_length), error1);
+    CHECK(server_receive_spawn(&player, map,fd_read, map_width), error1);
     player.which_player = player_num;
     int turn_counter = 0;
+    int iter = 0;
     while(!PLAYER_QUIT)
     {
         map_place_fow_player(map, map_width, map_length);
@@ -143,7 +144,7 @@ int main() {
             }
         }
 
-        CHECK ( server_send_move(player, fd_write), error1);
+        CHECK ( server_send_move( &player, fd_write), error1);
         wrefresh(game_window);
         wrefresh(stats_window);
         CHECK (render_map(map, game_window, map_width, map_length), error1 );
@@ -153,6 +154,7 @@ int main() {
         wrefresh(game_window);
         wrefresh(stats_window);
         CHECK( server_receive_turn_counter(&turn_counter, fd_read), error1);
+        iter++;
     }
 
     close(fd_write);
@@ -218,23 +220,29 @@ int player_move_human(map_point_t* map, dir_t dir, player_t * player, int map_wi
         return -1;
     }
 
-    if ( dir == LEFT)
+    if ( dir == LEFT && player->player->point.x > 0)
     {
         player->player = &map[ p_y * map_width + p_x - 1];
     }
-    else if( dir == RIGHT)
+    else if( dir == RIGHT && player->player->point.x < 31)
     {
         player->player = &map[ p_y * map_width + p_x + 1];
     }
-    else if( dir == UP)
+    else if( dir == UP && player->player->point.y > 0)
     {
         player->player = &map[ (p_y - 1) * map_width + p_x];
     }
-    else if( dir == DOWN)
+    else if( dir == DOWN && player->player->point.y < 31)
     {
         player->player = &map[ (p_y + 1)* map_width + p_x ];
     }
-    else
+    else {
+        return 0;
+    }
+
+    p_x = (int )player->player->point.x;
+    p_y = (int )player->player->point.y;
+    if( p_y < 0 || p_x < 0 || p_x > MAX_MAP_DIMENSION || p_y > MAX_MAP_DIMENSION)
     {
         return -1;
     }
@@ -253,11 +261,16 @@ int player_move_cpu(map_point_t* map, player_t * player, int map_width)
     int locs_cnt = 1;
     int p_x = (int) player->player->point.x;
     int p_y = (int) player->player->point.y;
+
+    if( p_x > MAX_MAP_DIMENSION || p_y > MAX_MAP_DIMENSION) {
+        return -1;
+    }
     for(int i = -1; i < 2; i++)
     {
         for(int j = -1; j < 2; j++)
         {
-            if( (i == -1 && j == 0) || (i == 1 && j == 0) || (i == 0 && j == -1) || (i == 0 && j == 1)  )
+            if( (i == -1 && j == 0 && player->player->point.y > 0) || (i == 1 && j == 0 && player->player->point.y < 31)
+             || (i == 0 && j == -1 && player->player->point.x > 0) || (i == 0 && j == 1 && player->player->point.x < 31)  )
             {
                 if (map[(p_y + i) * map_width + p_x + j].point_display_entity == ENTITY_FREE)
                 {
@@ -269,6 +282,12 @@ int player_move_cpu(map_point_t* map, player_t * player, int map_width)
     }
     possible_locs[0] = &map[p_y + p_x];
 
+    for(int i = 0; i < locs_cnt;i++)
+    {
+        if(possible_locs[i]->point.x > MAX_MAP_DIMENSION || possible_locs[i]->point.y > MAX_MAP_DIMENSION) {
+            return -1;
+        }
+    }
     int which_loc = rand() % locs_cnt;
     possible_locs[which_loc]->point_display_entity = player->which_player;
     player->player->point_display_entity = ENTITY_FREE;
@@ -298,7 +317,10 @@ int server_receive_map_update(map_point_t * map, int fd_read, int map_width)
 {
     const int map_fragment_size = 26;
     map_point_t map_fragment[map_fragment_size];
-    if(read(fd_read, map_fragment, sizeof(map_point_t) * 26) != sizeof(map_point_t) * 26) {
+    int err;
+    err = read(fd_read, map_fragment, sizeof(map_point_t) * map_fragment_size);
+    if( err != sizeof(map_point_t) * map_fragment_size) {
+        fprintf(stderr, "Runtime error: %s returned -1 at %s:%d", strerror(errno),__FILE__, __LINE__);
         return -1;
     }
     //error checking of the map
@@ -315,11 +337,11 @@ int server_receive_map_update(map_point_t * map, int fd_read, int map_width)
     }
     for(int i = 0; i < map_fragment_size; i++)
     {
-        unsigned int x = map_fragment[i].point.x;
-        unsigned int y = map_fragment[i].point.y;
-        if(x == 999 && y == 999) //our 'null terminator', used when against the wall
+        unsigned int mapf_x = map_fragment[i].point.x;
+        unsigned int mapf_y = map_fragment[i].point.y;
+        if(mapf_x == 999 && mapf_y == 999) //our 'null terminator', used when against the wall
             break;
-        map[(int) y * map_width + x] =  map_fragment[i];
+        map[(int) mapf_y * map_width + mapf_x] = map_fragment[i];
     }
     return 0;
 }
@@ -327,11 +349,12 @@ int server_receive_map_update(map_point_t * map, int fd_read, int map_width)
 int server_receive_spawn(player_t * player, map_point_t * map, int fd_read, int map_width)
 {
     map_point_t buf;
-    if (read(fd_read, &buf, sizeof(map_point_t )) != sizeof(map_point_t))
+    if (read(fd_read, &buf, sizeof(map_point_t )) != sizeof(map_point_t)) {
         return -1;
-    if(buf.point.y > MAX_MAP_DIMENSION || buf.point.x > MAX_MAP_DIMENSION)
+    }
+    if(buf.point.y > MAX_MAP_DIMENSION || buf.point.x > MAX_MAP_DIMENSION) {
         return -1;
-
+    }
     player->player = &map[buf.point.y * map_width + buf.point.x];
     player->spawn = &map[buf.point.y * map_width + buf.point.x];
     player->player->point_display_entity = buf.point_display_entity;
@@ -342,21 +365,29 @@ int server_receive_serverside_stats(stats_t * stats_p, int fd_read)
 {
 
     int buf;
-    if (read(fd_read, &buf, sizeof(int) )!= sizeof(int))
+    if (read(fd_read, &buf, sizeof(int) )!= sizeof(int)) {
         return -1;
+    }
     stats_p->brought = buf;
 
-    if (read(fd_read, &buf, sizeof(int) ) != sizeof(int))
+    if (read(fd_read, &buf, sizeof(int) ) != sizeof(int)) {
         return -1;
+    }
     stats_p->carried = buf;
 
     return 0;
 }
-int server_send_move(player_t moved_player, int fd_write)
+int server_send_move(player_t * moved_player, int fd_write)
 {
-    point_t temp = moved_player.player->point;
-    if (write(fd_write, &temp, sizeof(point_t)) != sizeof(point_t))
+    if( moved_player->player->point.x > MAX_MAP_DIMENSION || moved_player->player->point.y > MAX_MAP_DIMENSION){
         return -1;
+    }
+    point_t temp;
+    temp.y = moved_player->player->point.y;
+    temp.x = moved_player->player->point.x;
+    if (write(fd_write, &temp, sizeof(point_t)) != sizeof(point_t)) {
+        return -1;
+    }
     return 0;
 }
 

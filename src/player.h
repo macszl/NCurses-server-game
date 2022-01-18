@@ -56,6 +56,6 @@ int server_receive_map_dimensions(int * map_width_p, int * map_length_p, int fd_
 int server_receive_map_update(map_point_t * map, int fd_read, int map_width);
 int server_receive_spawn(player_t * player,map_point_t * map, int fd_read , int map_width);
 int server_receive_serverside_stats(stats_t * stats_p, int fd_read);
-int server_send_move(player_t moved_player, int fd_write);
+int server_send_move(player_t * moved_player, int fd_write);
 int server_receive_turn_counter(int * turn_counter_p, int fd_read);
 #endif //NCURSES_SERVER_GAME_PLAYER_H
