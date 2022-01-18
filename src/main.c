@@ -69,6 +69,7 @@ typedef struct beast_spawn_manager_t
 typedef struct server_side_player_t
 {
     point_t curr_location;
+    point_t spawn_location;
     char serv_to_p_fifo_name[20];
     char p_to_serv_fifo_name[20];
     int p_to_serv_fd;
@@ -98,11 +99,11 @@ int handle_beasts(map_point_t map[], beast_tracker_t * beast_tracker);
 //PLAYER STUFF
 void player_manager_init();
 void player_send_map_dimensions_internal(int which_player);
-void player_send_map_update(map_point_t map[], int which_player, point_t curr_location);
+int player_send_map_update(map_point_t map[], int which_player, point_t curr_location);
 void player_send_serverside_stats(int which_player, int carried, int brought);
 void player_send_spawn_internal(map_point_t * map, int map_width, int map_length, int which_player);
 void player_receive_move(map_point_t map[],int which_player);
-
+void player_send_turn(int turn_counter, int which_player);
 
 void handle_event(int c, map_point_t map[], beast_tracker_t * beast_tracker);
 
@@ -211,7 +212,13 @@ int main() {
         wrefresh(stats_window);
         turn_counter++;
         usleep(1000 * 1000);
-
+        for(int i = 0; i < 4; i++)
+        {
+            if( playerManager.players[i].is_free == false)
+            {// each one of these functions is thread safe
+                player_send_turn(i, turn_counter);
+            }
+        }
     }
 #else
     //singlethreaded mode: made for the ease of debugging
@@ -471,9 +478,10 @@ void player_send_map_dimensions_internal(int which_player)
         return;
     }
 }
-void player_send_map_update(map_point_t map[], int which_player, point_t curr_location)
+int player_send_map_update(map_point_t map[], int which_player, point_t curr_location)
 {
-    map_point_t buf[26];
+    const int map_fragment_size = 26;
+    map_point_t map_fragment[map_fragment_size];
     int array_cnt = 0;
     for(int i = -2; i < 3; i++) {
         if ((int) curr_location.y + i >= 0 && (int) curr_location.y + i <= MAP_WIDTH) {
@@ -482,23 +490,36 @@ void player_send_map_update(map_point_t map[], int which_player, point_t curr_lo
                 {
                     if ((int) curr_location.x + i == MAP_LENGTH || (int) curr_location.y + j == MAP_WIDTH)
                     {
-                        buf[array_cnt].point.y = 999;
-                        buf[array_cnt].point.x = 999;
+                        map_fragment[array_cnt].point.y = 999;
+                        map_fragment[array_cnt].point.x = 999;
                         array_cnt++;
                     } else {
-                        buf[array_cnt] = map[(curr_location.y + i )* MAP_WIDTH + curr_location.x + j];
+                        map_fragment[array_cnt] = map[(curr_location.y + i )* MAP_WIDTH + curr_location.x + j];
                         array_cnt++;
                     }
                 }
             }
         }
     }
-    buf[array_cnt].point.y = 999;
-    buf[array_cnt].point.x = 999;
+    map_fragment[array_cnt].point.y = 999;
+    map_fragment[array_cnt].point.x = 999;
 
+    //error checking of the map
+    for(int i = 0; i < map_fragment_size; i++)
+    {
+        if( map_fragment[i].point.y == 999 && map_fragment[i].point.x == 999)
+            break;
+        if( map_fragment[i].point.x > 32 || map_fragment[i].point.y > 32 ||
+            map_fragment[i].point_display_entity > ENTITY_COIN_DROPPED || map_fragment[i].point_terrain_entity > ENTITY_COIN_DROPPED ||
+            map_fragment[i].point_display_entity == ENTITY_UNKNOWN || map_fragment[i].point_terrain_entity == ENTITY_UNKNOWN)
+        {
+            return -1;
+        }
+    }
     pthread_mutex_lock(&mutex_player_manag);
-    write(playerManager.players[which_player].serv_to_p_fd, buf, sizeof(map_point_t) * 26);
+    write(playerManager.players[which_player].serv_to_p_fd, map_fragment, sizeof(map_point_t) * map_fragment_size);
     pthread_mutex_unlock(&mutex_player_manag);
+    return 0;
 }
 
 void player_send_serverside_stats(int which_player, int carried, int brought)
@@ -540,16 +561,27 @@ void player_send_spawn_internal(map_point_t * map, int map_width, int map_length
         spawn_loc_x = baseline_x + rand() % (map_length / 2);
         spawn_loc_y = baseline_y + rand() % (map_width / 2);
 
-        if (map[spawn_loc_y * map_width + spawn_loc_x].point_display_entity == ENTITY_FREE)
+        if (map[spawn_loc_y * map_width + spawn_loc_x].point_display_entity == ENTITY_FREE
+        && map[spawn_loc_y * map_width + spawn_loc_x].spawnerType == NO_SPAWNER)
             break;
     }
 
-
-    point_t temp = {.x = (unsigned) spawn_loc_x, .y = (unsigned) spawn_loc_y};
+    entity_t plr = attribute_list[which_player + 5].entity;
+    map_point_t temp = { .point.x = (unsigned) spawn_loc_x, .point.y = (unsigned) spawn_loc_y,
+                         .point_display_entity = plr, .point_terrain_entity = ENTITY_FREE};
     write(playerManager.players[which_player].serv_to_p_fd, &temp, sizeof(temp));
-//    playerManager.players[which_player].curr_location.y = (unsigned) spawn_loc_y;
-//    playerManager.players[which_player].curr_location.x = (unsigned) spawn_loc_x;
+    playerManager.players[which_player].curr_location.y = (unsigned) spawn_loc_y;
+    playerManager.players[which_player].curr_location.x = (unsigned) spawn_loc_x;
+    playerManager.players[which_player].spawn_location.y = (unsigned) spawn_loc_y;
+    playerManager.players[which_player].spawn_location.x = (unsigned) spawn_loc_x;
+}
 
+void player_send_turn(int turn_counter, int which_player)
+{
+    int buf = turn_counter;
+    pthread_mutex_lock(&mutex_player_manag);
+    write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int ));
+    pthread_mutex_unlock(&mutex_player_manag);
 }
 
 // Function that initializes the beastManager variable

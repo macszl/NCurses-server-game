@@ -4,155 +4,219 @@
 
 #include "player.h"
 
-#define CPU_INPUT -9
+#define CPU_INPUT (-9)
+#define NO_INPUT 1
+#define MAX_MAP_DIMENSION 128
 
-bool CPU_MODE = false;
+#define CHECK(x, y) do { \
+  int retval = (x); \
+  if (retval == -1) { \
+    fprintf(stderr, "Runtime error: %s returned %d at %s:%d", #x, retval, __FILE__, __LINE__); \
+    goto y;\
+  } \
+} while (0)
+
+bool CPU_MODE = true;
 bool PLAYER_QUIT = false;
+
+void *input_routine(void *input_storage);
+
+pthread_mutex_t mutex_input = PTHREAD_MUTEX_INITIALIZER;
+sem_t input_found_blockade;
+
 int main() {
+    ncurses_funcs_init();
+    timeout(100);
     srand((unsigned int) time(NULL));
 
     make_fifos();
     pid_t pid = getpid();
 
+    int input = NO_INPUT;
+    sem_init(&input_found_blockade, 0 ,0);
+    pthread_t thread1;
+    pthread_create(&thread1, NULL, input_routine, &input);
+
     int fd_write = open("fifo_p_to_s_init", O_WRONLY);
     int fd_read = open("fifo_s_to_p_init", O_RDONLY);
-    write(fd_write, &pid, sizeof(int));
+    CHECK (write(fd_write, &pid, sizeof(int)) , error0);
 
     int response;
-    read(fd_read, &response, sizeof(int) );
+    CHECK (read(fd_read, &response, sizeof(int) ), error0 );
     if(response == 234)
     {
+        close(fd_read);
+        close(fd_write);
         printf("Server is full... Leaving.\n");
         return 0;
     }
 
     server_info_t temp;
-    int err = read(fd_read, &temp, sizeof(server_info_t));
-    if(err == -1 || temp.p_to_serv_fifo_name[0] == 0)
+    CHECK( read(fd_read, &temp, sizeof(server_info_t)), error0 );
+    if(temp.p_to_serv_fifo_name[0] == 0)
     {
         printf("Error reading server info... Quitting.\n");
-        return -1;
+        goto error0;
     }
+
 
     close(fd_read);
     close(fd_write);
     int serv_process_id = temp.process_id;
-    int carried = 0;
-    int brought = 0;
     entity_t player_num = (unsigned int) ENTITY_PLAYER_1 + (unsigned int) temp.player_num;
 
-    fd_read = open(temp.serv_to_p_fifo_name, O_RDONLY);
-    if(fd_read == -1)
-    {
-        printf("Failed to open server to player FIFO... Leaving.\n");
-        return -1;
-    }
-    fd_write = open(temp.p_to_serv_fifo_name, O_WRONLY);
-    if(fd_write == -1)
-    {
-        printf("Failed to open player to server FIFO... Leaving.\n");
-        return -1;
-    }
 
-    int map_length;
-    int map_width;
+    CHECK(fd_read = open(temp.serv_to_p_fifo_name, O_RDONLY), error0);
+    CHECK (fd_write = open(temp.p_to_serv_fifo_name, O_WRONLY), error0);
+    int map_length, map_width;
 
+    CHECK ( server_receive_map_dimensions(&map_width, &map_length, fd_read), error0 );
 
-    server_receive_map_dimensions(&map_width, &map_length, fd_read);
+    if(map_width != 32 || map_length != 32) goto error0;
 
-    if(map_width != 32 || map_length != 32)
-    {
-        printf("Wrong map dimension data received... Leaving\n");
-        return -1;
-    }
     map_point_t * map = malloc(sizeof(map_point_t) * map_width * map_length);
-    if(map == NULL)
-    {
-        printf("Failed to allocate memory\n");
-        return -1;
-    }
+
+    if(map == NULL) goto error0;
+
     map_place_fow_player(map, map_width, map_length);
 
     ncurses_funcs_init();
-    int stat_window_start_x = map_length + 8;
-    int stat_window_start_y = 0;
+    int stat_window_start_x = map_length + 8, stat_window_start_y = 0;
+
     WINDOW * stats_window = newwin(10, 50, stat_window_start_y, stat_window_start_x);
     WINDOW * game_window = newwin(map_width + 1, map_length + 1,0,0);
 
+    refresh();
+    box(game_window, 0, 0);
+    box(stats_window, 0, 0);
+    attribute_list_init();
+
     stats_t stats;
     player_t player;
-    server_receive_spawn(&player, map,fd_read, map_width, map_length);
+    CHECK (server_receive_spawn(&player, map,fd_read, map_width, map_length), error1);
     player.which_player = player_num;
-    int c;
+    int turn_counter = 0;
     while(!PLAYER_QUIT)
     {
         map_place_fow_player(map, map_width, map_length);
-        server_receive_serverside_stats(&stats, fd_read);
-        server_receive_map_update(map, fd_read, map_width, map_length);
-        render_map(map, game_window, map_width, map_length);
-        stat_window_display_player(stats_window, serv_process_id, carried, brought);
         wrefresh(game_window);
         wrefresh(stats_window);
-        if(CPU_MODE == false)
-        {
-            c = getch();
-            handle_event(c, map, &player, map_width);
-        }
-        else
-        {
-            handle_event(CPU_INPUT, map, &player, map_width);
-        }
-        server_send_move(player, fd_write);
-    }
-    close(fd_write);
-    close(fd_read);
-    free(map);
-    return 0;
-}
 
-void handle_event(int c, map_point_t map[], player_t * player, int map_width)
-{
-    switch (c) {
-        case KEY_RIGHT: {
-            player_move_human (map, RIGHT, player, map_width);
+        CHECK( server_receive_serverside_stats(&stats, fd_read), error1);
+        wrefresh(game_window);
+        wrefresh(stats_window);
+
+        CHECK( server_receive_map_update(map, fd_read, map_width), error1);
+        wrefresh(game_window);
+        wrefresh(stats_window);
+
+        pthread_mutex_lock(&mutex_input);
+        if(input == (int) 'q' || input == (int) 'Q')
+        {
+            sem_post(&input_found_blockade);
             break;
         }
-        case KEY_DOWN: {
-            player_move_human (map, DOWN, player, map_width);
-            break;
-        }
-        case KEY_LEFT: {
-            player_move_human (map, LEFT, player, map_width);
-            break;
-        }
-        case KEY_UP: {
-            player_move_human (map, UP, player, map_width);
-            break;
-        }
-        case 'A':
-        case 'a': {
+        else if(input == (int) 'a' || input == (int) 'A') {
             CPU_MODE = !CPU_MODE;
             break;
         }
-        case 'q':
-        case 'Q': {
-            PLAYER_QUIT = true;
-            break;
+        pthread_mutex_unlock(&mutex_input);
+
+        pthread_mutex_lock(&mutex_input);
+        if(CPU_MODE == true)
+        {
+            CHECK( handle_event( CPU_INPUT, map, &player, map_width), error1 );
+            pthread_mutex_unlock(&mutex_input);
+            sem_post(&input_found_blockade);
         }
-        case CPU_INPUT: {
-            player_move_cpu (map, player, map_width);
-            break;
+        else
+        {
+            if(input != NO_INPUT)
+            {
+                CHECK (handle_event(input, map, &player, map_width), error1);
+                pthread_mutex_unlock(&mutex_input);
+                sem_post(&input_found_blockade);
+            }
+            else
+            {
+                pthread_mutex_unlock(&mutex_input);
+            }
         }
+
+        CHECK ( server_send_move(player, fd_write), error1);
+        wrefresh(game_window);
+        wrefresh(stats_window);
+        CHECK (render_map(map, game_window, map_width, map_length), error1 );
+        wrefresh(game_window);
+        wrefresh(stats_window);
+        CHECK( stat_window_display_player(stats_window, serv_process_id, turn_counter, stats.carried, stats.brought), error1 );
+        wrefresh(game_window);
+        wrefresh(stats_window);
+        CHECK( server_receive_turn_counter(&turn_counter, fd_read), error1);
+    }
+
+    close(fd_write);
+    close(fd_read);
+    free(map);
+    PLAYER_QUIT = true;
+    pthread_join(thread1, NULL);
+    pthread_mutex_destroy(&mutex_input);
+    sem_destroy(&input_found_blockade);
+    endwin();
+    return 0;
+
+    error0:
+
+
+    close(fd_write);
+    close(fd_read);
+    pthread_mutex_destroy(&mutex_input);
+    sem_destroy(&input_found_blockade);
+    endwin();
+    return -1;
+
+    error1:
+
+    free(map);
+    close(fd_read);
+    close(fd_write);
+    PLAYER_QUIT = true;
+    pthread_join(thread1, NULL);
+    pthread_mutex_destroy(&mutex_input);
+    sem_destroy(&input_found_blockade);
+    endwin();
+    return -1;
+
+}
+
+int handle_event(int c, map_point_t map[], player_t * player, int map_width)
+{
+    switch (c) {
+        case KEY_RIGHT:
+            return player_move_human (map, RIGHT, player, map_width);
+        case KEY_DOWN:
+            return player_move_human (map, DOWN, player, map_width);
+        case KEY_LEFT:
+            return player_move_human (map, LEFT, player, map_width);
+        case KEY_UP:
+            return player_move_human (map, UP, player, map_width);
+        case CPU_INPUT:
+            return player_move_cpu (map, player, map_width);
         default:
             break;
     }
+    return 0;
 }
 
-void player_move_human(map_point_t* map, dir_t dir, player_t * player, int map_width)
+int player_move_human(map_point_t* map, dir_t dir, player_t * player, int map_width)
 {
+
     int p_x = (int )player->player->point.x;
     int p_y = (int )player->player->point.y;
-
+    if( p_y < 0 || p_x < 0 || p_x > MAX_MAP_DIMENSION || p_y > MAX_MAP_DIMENSION)
+    {
+        return -1;
+    }
 
     if ( dir == LEFT)
     {
@@ -170,11 +234,21 @@ void player_move_human(map_point_t* map, dir_t dir, player_t * player, int map_w
     {
         player->player = &map[ (p_y + 1)* map_width + p_x ];
     }
+    else
+    {
+        return -1;
+    }
+    return 0;
 }
 
-void player_move_cpu(map_point_t* map, player_t * player, int map_width)
+int player_move_cpu(map_point_t* map, player_t * player, int map_width)
 {
-
+    if( player->player->point.y > MAX_MAP_DIMENSION || player->player->point.x > MAX_MAP_DIMENSION ||
+        player->player->point_display_entity != player->which_player ||
+        player->spawn->point.y > MAX_MAP_DIMENSION || player->spawn->point.x > MAX_MAP_DIMENSION)
+    {
+        return -1;
+    }
     map_point_t * possible_locs[5];
     int locs_cnt = 1;
     int p_x = (int) player->player->point.x;
@@ -199,58 +273,122 @@ void player_move_cpu(map_point_t* map, player_t * player, int map_width)
     possible_locs[which_loc]->point_display_entity = player->which_player;
     player->player->point_display_entity = ENTITY_FREE;
     player->player = possible_locs[which_loc];
+    return 0;
 }
 
-void server_receive_map_dimensions(int * map_width_p, int * map_length_p, int fd_read)
+int server_receive_map_dimensions(int * map_width_p, int * map_length_p, int fd_read)
 {
     int buf;
-    read(fd_read, &buf, sizeof(int) );
-    if(buf < 0 || buf > 128) {
-        return;
+    if ( read(fd_read, &buf, sizeof(int) ) != sizeof(int)) {
+        return -1;
+    }
+    if(buf < 0 || buf > MAX_MAP_DIMENSION) {
+        return -1;
     }
     *map_width_p = buf;
 
     read(fd_read, &buf, sizeof(int) );
-    if(buf < 0 || buf > 128) {
-        return;
+    if(buf < 0 || buf > MAX_MAP_DIMENSION) {
+        return -1;
     }
     *map_length_p = buf;
+    return 0;
 }
-void server_receive_map_update(map_point_t * map, int fd_read, int map_width, int map_length)
+int server_receive_map_update(map_point_t * map, int fd_read, int map_width)
 {
-    map_point_t map_fragment[26];
-    read(fd_read, map_fragment, sizeof(map_point_t) * 26);
-
-    for(int i = 0; i < 26; i++)
+    const int map_fragment_size = 26;
+    map_point_t map_fragment[map_fragment_size];
+    if(read(fd_read, map_fragment, sizeof(map_point_t) * 26) != sizeof(map_point_t) * 26) {
+        return -1;
+    }
+    //error checking of the map
+    for(int i = 0; i < map_fragment_size; i++)
+    {
+        if( map_fragment[i].point.y == 999 && map_fragment[i].point.x == 999)
+            break;
+        if( map_fragment[i].point.x > MAX_MAP_DIMENSION || map_fragment[i].point.y > MAX_MAP_DIMENSION ||
+            map_fragment[i].point_display_entity > ENTITY_COIN_DROPPED || map_fragment[i].point_terrain_entity > ENTITY_COIN_DROPPED ||
+            map_fragment[i].point_display_entity == ENTITY_UNKNOWN || map_fragment[i].point_terrain_entity == ENTITY_UNKNOWN)
+        {
+            return -1;
+        }
+    }
+    for(int i = 0; i < map_fragment_size; i++)
     {
         unsigned int x = map_fragment[i].point.x;
         unsigned int y = map_fragment[i].point.y;
         if(x == 999 && y == 999) //our 'null terminator', used when against the wall
             break;
-        map[(int) y * map_width + map_length] =  map_fragment[i];
+        map[(int) y * map_width + x] =  map_fragment[i];
     }
+    return 0;
 }
 
-void server_receive_spawn(player_t * player, map_point_t * map, int fd_read, int map_width, int map_length)
+int server_receive_spawn(player_t * player, map_point_t * map, int fd_read, int map_width)
 {
-    point_t buf;
-    read(fd_read, &buf, sizeof(point_t));
-    player->player = &map[buf.y * map_width + buf.x];
-    player->spawn = &map[buf.y * map_width + buf.x];
+    map_point_t buf;
+    if (read(fd_read, &buf, sizeof(map_point_t )) != sizeof(map_point_t))
+        return -1;
+    if(buf.point.y > MAX_MAP_DIMENSION || buf.point.x > MAX_MAP_DIMENSION)
+        return -1;
 
+    player->player = &map[buf.point.y * map_width + buf.point.x];
+    player->spawn = &map[buf.point.y * map_width + buf.point.x];
+    player->player->point_display_entity = buf.point_display_entity;
+    player->player->point_terrain_entity = buf.point_terrain_entity;
+    return 0;
 }
-void server_receive_serverside_stats(stats_t * stats_p, int fd_read)
+int server_receive_serverside_stats(stats_t * stats_p, int fd_read)
 {
+
     int buf;
-    read(fd_read, &buf, sizeof(int) );
+    if (read(fd_read, &buf, sizeof(int) )!= sizeof(int))
+        return -1;
     stats_p->brought = buf;
 
-    read(fd_read, &buf, sizeof(int) );
+    if (read(fd_read, &buf, sizeof(int) ) != sizeof(int))
+        return -1;
     stats_p->carried = buf;
+
+    return 0;
 }
-void server_send_move(player_t moved_player, int fd_write)
+int server_send_move(player_t moved_player, int fd_write)
 {
     point_t temp = moved_player.player->point;
-    write(fd_write, &temp, sizeof(player_t));
+    if (write(fd_write, &temp, sizeof(point_t)) != sizeof(point_t))
+        return -1;
+    return 0;
+}
+
+int server_receive_turn_counter(int * turn_counter_p, int fd_read)
+{
+    int buf;
+    if( read(fd_read, &buf, sizeof(int)) != sizeof(int ) ){
+        return -1;
+    }
+    *turn_counter_p = buf;
+    return 0;
+}
+void *input_routine(void *input_storage) {
+    while (!PLAYER_QUIT) {
+        pthread_mutex_lock(&mutex_input);
+        *(int *) input_storage = NO_INPUT;
+        pthread_mutex_unlock(&mutex_input);
+
+        char c = (char) getch();
+        flushinp();
+        if( c != NO_INPUT) {
+            pthread_mutex_lock(&mutex_input);
+            *(int *) input_storage = (int) c;
+            pthread_mutex_unlock(&mutex_input);
+            sem_wait(&input_found_blockade);
+            if ( c ==  'q' ) {
+                break;
+            }else {
+                continue;
+            }
+        }
+    }
+    return NULL;
 }
 

@@ -69,6 +69,7 @@ int map_place_fow_player(map_point_t map[], const int MAP_WIDTH, const int MAP_L
             map[i * MAP_WIDTH + j].point_terrain_entity = ENTITY_UNKNOWN;
             map[i * MAP_WIDTH + j].point.x = (unsigned int) j;
             map[i * MAP_WIDTH + j].point.y = (unsigned int) i;
+            map[i * MAP_WIDTH + j].spawnerType = NO_SPAWNER;
         }
     }
     return 0;
@@ -116,9 +117,13 @@ void stat_window_display_server(WINDOW * window, int pid, int turn_cnt)
     mvwprintw(window, 2, 1, "Server process ID: %d", pid);
 }
 
-void stat_window_display_player(WINDOW * window, int pid, int carried, int brought)
+int stat_window_display_player(WINDOW * window, int pid ,int turn_counter, int carried, int brought)
 {
+    if( pid < 0 || turn_counter < 0 || carried < 0 || brought < 0)
+        return -1;
     mvwprintw(window, 1, 1, "Server process ID: %d", pid);
-    mvwprintw(window, 2, 1, "Carried: %d", carried);
-    mvwprintw(window, 3, 1, "Brought: %d", brought);
+    mvwprintw(window, 2, 1, "Turn: %d", turn_counter);
+    mvwprintw(window, 3, 1, "Carried: %d", carried);
+    mvwprintw(window, 4, 1, "Brought: %d", brought);
+    return 0;
 }
