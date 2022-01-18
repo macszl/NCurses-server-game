@@ -79,6 +79,9 @@ typedef struct server_side_player_t
     bool is_free;
     int carried;
     int brought;
+    bool has_sent_stats;
+    bool has_sent_map;
+    bool has_received_move;
 } server_side_player_t;
 
 typedef struct player_manager_t
@@ -214,7 +217,8 @@ int main() {
         usleep(1000 * 1000);
         for(int i = 0; i < 4; i++)
         {
-            if( playerManager.players[i].is_free == false)
+            if( playerManager.players[i].is_free == false && playerManager.players[i].has_received_move == true &&
+                playerManager.players[i].has_sent_map == true && playerManager.players[i].has_sent_stats == true)
             {// each one of these functions is thread safe
                 player_send_turn(turn_counter, i);
             }
@@ -469,17 +473,12 @@ void player_send_map_dimensions_internal(int which_player)
     {
         return;
     }
-    if(buf < 0 || buf > 128) {
-        return;
-    }
+
 
     buf = MAP_LENGTH;
     err = write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int) );
     if( err != sizeof(int))
     {
-        return;
-    }
-    if(buf < 0 || buf > 128) {
         return;
     }
 }
@@ -523,14 +522,15 @@ int player_send_map_update(map_point_t map[], int which_player, point_t curr_loc
     }
     pthread_mutex_lock(&mutex_player_manag);
     int err;
-    for(int i = 0; i < map_fragment_size; i++)
-    err = write(playerManager.players[which_player].serv_to_p_fd, &map_fragment[i], sizeof(map_point_t) * map_fragment_size);
+    err = write(playerManager.players[which_player].serv_to_p_fd, map_fragment, sizeof(map_point_t) * map_fragment_size);
     if( err != sizeof(map_point_t) * map_fragment_size)
     {
         pthread_mutex_unlock(&mutex_player_manag);
         return -1;
     }
     pthread_mutex_unlock(&mutex_player_manag);
+
+    playerManager.players[which_player].has_sent_map = true;
     return 0;
 }
 
@@ -551,12 +551,20 @@ void player_send_serverside_stats(int which_player, int carried, int brought)
         return;
     }
     pthread_mutex_unlock(&mutex_player_manag);
+    playerManager.players[which_player].has_sent_stats = true;
 }
 void player_receive_move(map_point_t map[], int which_player, int map_width)
 {
+    point_t old_loc;
     point_t new_loc;
     pthread_mutex_lock(&mutex_player_manag);
-    int err = read(playerManager.players[which_player].p_to_serv_fd, &new_loc, sizeof(point_t));
+    int err = read(playerManager.players[which_player].p_to_serv_fd, &old_loc, sizeof(point_t));
+    if ( err != sizeof(point_t)) {
+        pthread_mutex_unlock(&mutex_player_manag);
+        return;
+    }
+
+    err = read(playerManager.players[which_player].p_to_serv_fd, &new_loc, sizeof(point_t));
     if ( err != sizeof(point_t)) {
         pthread_mutex_unlock(&mutex_player_manag);
         return;
@@ -567,8 +575,15 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
     if(new_loc.y > MAP_WIDTH || new_loc.x > MAP_LENGTH){
         return;
     }
-    if( map[new_loc.y * MAP_WIDTH + new_loc.x].point_display_entity == ENTITY_WALL)
+    int total_distance_x = abs(new_loc.x - old_loc.x);
+    int total_distance_y = abs(new_loc.y - old_loc.y);
+    if(total_distance_x + total_distance_y > 2)
+    {
         return;
+    }
+    if( map[new_loc.y * MAP_WIDTH + new_loc.x].point_display_entity == ENTITY_WALL) {
+        return;
+    }
 
     pthread_mutex_lock(&mutex_player_manag);
     int old_x = playerManager.players[which_player].curr_location.x;
@@ -580,6 +595,7 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
     map[new_loc.y * map_width + new_loc.x].point_display_entity = player_num;
 
     pthread_mutex_unlock(&mutex_player_manag);
+    playerManager.players[which_player].has_received_move = true;
 }
 
 void player_send_spawn_internal(map_point_t * map, int map_width, int map_length, int which_player)
@@ -604,7 +620,7 @@ void player_send_spawn_internal(map_point_t * map, int map_width, int map_length
     entity_t plr = attribute_list[which_player + 5].entity;
     map_point_t temp = { .point.x = (unsigned) spawn_loc_x, .point.y = (unsigned) spawn_loc_y,
                          .point_display_entity = plr, .point_terrain_entity = ENTITY_FREE, .spawnerType = NO_SPAWNER};
-    int err = write(playerManager.players[which_player].serv_to_p_fd, &temp, sizeof(temp));
+    int err = write(playerManager.players[which_player].serv_to_p_fd, &temp, sizeof(map_point_t));
     if(err != sizeof(temp))
     {
         return;
@@ -629,6 +645,9 @@ void player_send_turn(int turn_counter, int which_player)
         return;
     }
     pthread_mutex_unlock(&mutex_player_manag);
+    playerManager.players[which_player].has_received_move = false;
+    playerManager.players[which_player].has_sent_map = false;
+    playerManager.players[which_player].has_sent_stats = false;
 }
 
 // Function that initializes the beastManager variable
