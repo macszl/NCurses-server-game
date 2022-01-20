@@ -133,10 +133,14 @@ int main() {
     srand((unsigned int) time(NULL));
     make_fifos();
 
+
     player_manager_init();
     map_point_t map[MAP_LENGTH * MAP_WIDTH];
-
+    map_point_t basic_map_for_validation[MAP_LENGTH * MAP_WIDTH];
     int err = map_init(map, MAP_WIDTH, MAP_LENGTH);
+    if(err != 0)
+        return 1;
+    err = map_init(basic_map_for_validation, MAP_WIDTH, MAP_LENGTH);
     if(err != 0)
         return 1;
 
@@ -195,8 +199,15 @@ int main() {
             pthread_mutex_unlock(&mutex_input);
         }
 
+        if(map_validate_server(basic_map_for_validation, map, MAP_WIDTH, MAP_LENGTH) == -1) {
+            return -1;
+        }
+
         handle_beasts(map, &beast_tracker);
 
+        if(map_validate_server(basic_map_for_validation, map, MAP_WIDTH, MAP_LENGTH) == -1) {
+            return -1;
+        }
         //handle_players
         for(int i = 0; i < 4; i++)
         {
@@ -207,14 +218,14 @@ int main() {
                 player_receive_move(map, i, MAP_WIDTH);
             }
         }
-
+        if(map_validate_server(basic_map_for_validation, map, MAP_WIDTH, MAP_LENGTH) == -1) {
+            return -1;
+        }
         render_map(map, game_window, MAP_WIDTH, MAP_LENGTH);
         stat_window_display_server(stats_window, server_pid, turn_counter);
 
         wrefresh(game_window);
         wrefresh(stats_window);
-        turn_counter++;
-        usleep(1000 * 1000);
         for(int i = 0; i < 4; i++)
         {
             if( playerManager.players[i].is_free == false && playerManager.players[i].has_received_move == true &&
@@ -223,6 +234,8 @@ int main() {
                 player_send_turn(turn_counter, i);
             }
         }
+        turn_counter++;
+        usleep(1000 * 1000);
     }
 #else
     //singlethreaded mode: made for the ease of debugging

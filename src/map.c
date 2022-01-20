@@ -127,3 +127,52 @@ int stat_window_display_player(WINDOW * window, int pid ,int turn_counter, int c
     mvwprintw(window, 4, 1, "Brought: %d", brought);
     return 0;
 }
+
+int map_validate_server(map_point_t map[], map_point_t new_map[], const int MAP_WIDTH, const int MAP_LENGTH)
+{
+    for(int i = 0; i < MAP_WIDTH; i++)
+    {
+        for (int j = 0; j < MAP_LENGTH; ++j) {
+            if( map[i * MAP_WIDTH + j].point_display_entity == ENTITY_FREE &&
+            (new_map[i * MAP_WIDTH + j].point_display_entity != ENTITY_FREE && !is_beast(new_map[i * MAP_WIDTH + j]) && !is_player(new_map[i * MAP_WIDTH + j]) && !is_coin(new_map[i * MAP_WIDTH + j])))
+            {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+bool is_coin(map_point_t mapPoint)
+{
+    if(mapPoint.point_display_entity >= ENTITY_COIN_SMALL)
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+bool is_beast(map_point_t mapPoint)
+{
+    if(mapPoint.point_display_entity == ENTITY_BEAST)
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+bool is_player(map_point_t mapPoint)
+{
+    if(mapPoint.point_display_entity >= ENTITY_PLAYER_1 && mapPoint.point_display_entity <= ENTITY_PLAYER_4)
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}

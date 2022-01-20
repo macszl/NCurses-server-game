@@ -98,7 +98,7 @@ int main() {
     CHECK(server_receive_spawn(&player, map,fd_read, map_width), error1);
     player.which_player = player_num;
 
-    player_t new_player;
+    player_t new_player = { .player_loc = player.player_loc, .spawn_loc = player.spawn_loc, .which_player = player.which_player};
 
     int stat_window_start_x = map_length + 8, stat_window_start_y = 0;
 
@@ -121,7 +121,15 @@ int main() {
         wrefresh(game_window);
         wrefresh(stats_window);
 
-        CHECK( server_receive_map_update(map, fd_read, map_width), error1);
+        CHECK( server_receive_map_update(map, &player, fd_read, map_width), error1);
+        wrefresh(game_window);
+        wrefresh(stats_window);
+
+        CHECK (render_map(map, game_window, map_width, map_length), error1 );
+        wrefresh(game_window);
+        wrefresh(stats_window);
+
+        CHECK( stat_window_display_player(stats_window, serv_process_id, turn_counter, stats.carried, stats.brought), error1 );
         wrefresh(game_window);
         wrefresh(stats_window);
 
@@ -157,14 +165,14 @@ int main() {
                 pthread_mutex_unlock(&mutex_input);
             }
         }
+        int total_distance_x = abs(new_player.player_loc.x - player.player_loc.x);
+        int total_distance_y = abs(new_player.player_loc.y - player.player_loc.y);
+        if(total_distance_x + total_distance_y > 2)
+        {
+            return -1;
+        }
 
         CHECK ( server_send_move( &player, &new_player, fd_write), error1);
-        wrefresh(game_window);
-        wrefresh(stats_window);
-        CHECK (render_map(map, game_window, map_width, map_length), error1 );
-        wrefresh(game_window);
-        wrefresh(stats_window);
-        CHECK( stat_window_display_player(stats_window, serv_process_id, turn_counter, stats.carried, stats.brought), error1 );
         wrefresh(game_window);
         wrefresh(stats_window);
         CHECK( server_receive_turn_counter(&turn_counter, fd_read), error1);
@@ -309,7 +317,7 @@ int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, 
             }
         }
     }
-    possible_locs[0] = &map[p_y + p_x];
+    possible_locs[0] = &map[p_y * map_width + p_x];
 
     for(int i = 0; i < locs_cnt;i++)
     {
@@ -319,6 +327,13 @@ int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, 
     }
     int which_loc = rand() % locs_cnt;
     new_player->player_loc = possible_locs[which_loc]->point;
+
+    int total_distance_x = abs(new_player->player_loc.x - player->player_loc.x);
+    int total_distance_y = abs(new_player->player_loc.y - player->player_loc.y);
+    if(total_distance_x + total_distance_y > 2)
+    {
+        return -1;
+    }
     return 0;
 }
 
@@ -340,7 +355,7 @@ int server_receive_map_dimensions(int * map_width_p, int * map_length_p, int fd_
     *map_length_p = buf;
     return 0;
 }
-int server_receive_map_update(map_point_t * map, int fd_read, int map_width)
+int server_receive_map_update(map_point_t * map, player_t * player, int fd_read, int map_width)
 {
     const int map_fragment_size = 26;
     map_point_t map_fragment[map_fragment_size];
@@ -368,6 +383,10 @@ int server_receive_map_update(map_point_t * map, int fd_read, int map_width)
         unsigned int mapf_y = map_fragment[i].point.y;
         if(mapf_x == 999 && mapf_y == 999) //our 'null terminator', used when against the wall
             break;
+        if( map_fragment[i].point_display_entity == player->which_player)
+        {
+            player->player_loc = map_fragment[i].point;
+        }
         map[(int) mapf_y * map_width + mapf_x] = map_fragment[i];
     }
     return 0;
@@ -382,8 +401,8 @@ int server_receive_spawn(player_t * player, map_point_t * map, int fd_read, int 
     if(buf.point.y > MAX_MAP_DIMENSION || buf.point.x > MAX_MAP_DIMENSION) {
         return -1;
     }
-    player->player_loc = map[buf.point.y * map_width + buf.point.x].point;
-    player->spawn_loc = map[buf.point.y * map_width + buf.point.x].point;
+    player->player_loc = buf.point;
+    player->spawn_loc = buf.point;
     map[buf.point.y * map_width + buf.point.x].point_display_entity = buf.point_display_entity;
     map[buf.point.y * map_width + buf.point.x].point_terrain_entity = buf.point_terrain_entity;
     map[buf.point.y * map_width + buf.point.x].spawnerType = buf.spawnerType;
@@ -409,6 +428,15 @@ int server_send_move(player_t * player_before_move, player_t * player_after_move
 {
     if( player_after_move->player_loc.x > MAX_MAP_DIMENSION || player_after_move->player_loc.y > MAX_MAP_DIMENSION ||
         player_before_move->player_loc.x > MAX_MAP_DIMENSION || player_before_move->player_loc.y > MAX_MAP_DIMENSION){
+        return -1;
+    }
+
+    point_t new_loc = player_after_move->player_loc;
+    point_t old_loc = player_after_move->player_loc;
+    int total_distance_x = abs(new_loc.x - old_loc.x);
+    int total_distance_y = abs(new_loc.y - old_loc.y);
+    if(total_distance_x + total_distance_y > 2)
+    {
         return -1;
     }
     point_t temp_pbefore;

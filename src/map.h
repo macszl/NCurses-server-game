@@ -61,4 +61,8 @@ void attribute_list_init();
 int render_map(map_point_t map[], WINDOW * window, int MAP_WIDTH, int MAP_LENGTH);
 void stat_window_display_server(WINDOW * window, int pid, int turn_cnt);
 int stat_window_display_player(WINDOW * window, int pid ,int turn_counter, int carried, int brought);
+int map_validate_server(map_point_t map[], map_point_t new_map[], const int MAP_WIDTH, const int MAP_LENGTH);
+bool is_coin(map_point_t mapPoint);
+bool is_beast(map_point_t mapPoint);
+bool is_player(map_point_t mapPoint);
 #endif //NCURSES_SERVER_GAME_MAP_H
