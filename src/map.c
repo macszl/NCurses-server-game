@@ -111,13 +111,8 @@ void attribute_list_init()
         attribute_list[i].ch = attribute_list[i].ch | A_REVERSE | COLOR_PAIR(col);
     }
 }
-void stat_window_display_server(WINDOW * window, int pid, int turn_cnt)
-{
-    mvwprintw(window, 1, 1, "Current turn: %d", turn_cnt);
-    mvwprintw(window, 2, 1, "Server process ID: %d", pid);
-}
 
-int stat_window_display_player(WINDOW * window, int pid ,int turn_counter, int carried, int brought)
+int stat_window_display_player(WINDOW * window, int pid ,int turn_counter, int carried, int brought, int deaths)
 {
     if( pid < 0 || turn_counter < 0 || carried < 0 || brought < 0)
         return -1;
@@ -125,6 +120,7 @@ int stat_window_display_player(WINDOW * window, int pid ,int turn_counter, int c
     mvwprintw(window, 2, 1, "Turn: %d", turn_counter);
     mvwprintw(window, 3, 1, "Carried: %d", carried);
     mvwprintw(window, 4, 1, "Brought: %d", brought);
+    mvwprintw(window, 5, 1, "Deaths: %d", deaths);
     return 0;
 }
 
@@ -133,8 +129,9 @@ int map_validate_server(map_point_t map[], map_point_t new_map[], const int MAP_
     for(int i = 0; i < MAP_WIDTH; i++)
     {
         for (int j = 0; j < MAP_LENGTH; ++j) {
-            if( map[i * MAP_WIDTH + j].point_display_entity == ENTITY_FREE &&
-            (new_map[i * MAP_WIDTH + j].point_display_entity != ENTITY_FREE && !is_beast(new_map[i * MAP_WIDTH + j]) && !is_player(new_map[i * MAP_WIDTH + j]) && !is_coin(new_map[i * MAP_WIDTH + j])))
+            bool old_map_entity_is_free = map[i * MAP_WIDTH + j].point_display_entity == ENTITY_FREE;
+            bool new_map_entity_is_invalid = (new_map[i * MAP_WIDTH + j].point_display_entity != ENTITY_FREE && !is_beast(new_map[i * MAP_WIDTH + j]) && !is_player(new_map[i * MAP_WIDTH + j]) && !is_coin(new_map[i * MAP_WIDTH + j]));
+            if( old_map_entity_is_free && new_map_entity_is_invalid)
             {
                 return -1;
             }

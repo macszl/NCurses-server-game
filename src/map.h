@@ -59,8 +59,7 @@ int map_place_fow_player(map_point_t map[], const int MAP_WIDTH, const int MAP_L
 void ncurses_funcs_init();
 void attribute_list_init();
 int render_map(map_point_t map[], WINDOW * window, int MAP_WIDTH, int MAP_LENGTH);
-void stat_window_display_server(WINDOW * window, int pid, int turn_cnt);
-int stat_window_display_player(WINDOW * window, int pid ,int turn_counter, int carried, int brought);
+int stat_window_display_player(WINDOW * window, int pid ,int turn_counter, int carried, int brought, int deaths);
 int map_validate_server(map_point_t map[], map_point_t new_map[], const int MAP_WIDTH, const int MAP_LENGTH);
 bool is_coin(map_point_t mapPoint);
 bool is_beast(map_point_t mapPoint);

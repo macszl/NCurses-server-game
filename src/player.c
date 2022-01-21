@@ -26,7 +26,6 @@ sem_t input_found_blockade;
 
 int main() {
     ncurses_funcs_init();
-    timeout(100);
     srand((unsigned int) time(NULL));
     attribute_list_init();
 
@@ -141,7 +140,6 @@ int main() {
         }
         else if(input == (int) 'a' || input == (int) 'A') {
             CPU_MODE = !CPU_MODE;
-            break;
         }
         pthread_mutex_unlock(&mutex_input);
 
@@ -289,6 +287,7 @@ int player_move_human( dir_t dir, player_t * player, player_t * new_player)
 
 int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, int map_width)
 {
+    //TODO MAKE IT RUN AWAY FROM THE BEASTS
     if( player->player_loc.y > MAX_MAP_DIMENSION || player->player_loc.x > MAX_MAP_DIMENSION ||
         player->spawn_loc.y > MAX_MAP_DIMENSION || player->spawn_loc.x > MAX_MAP_DIMENSION)
     {
@@ -470,9 +469,9 @@ void *input_routine(void *input_storage) {
         *(int *) input_storage = NO_INPUT;
         pthread_mutex_unlock(&mutex_input);
 
-        char c = (char) getch();
+        int c = getch();
         flushinp();
-        if( c != NO_INPUT) {
+        if( c != -1) {
             pthread_mutex_lock(&mutex_input);
             *(int *) input_storage = (int) c;
             pthread_mutex_unlock(&mutex_input);
