@@ -110,6 +110,7 @@ int main() {
 
     int turn_counter = 0;
     int iter = 0;
+    int deaths = 0;
     while(!PLAYER_QUIT)
     {
         map_place_fow_player(map, map_width, map_length);
@@ -128,7 +129,7 @@ int main() {
         wrefresh(game_window);
         wrefresh(stats_window);
 
-        CHECK( stat_window_display_player(stats_window, serv_process_id, turn_counter, stats.carried, stats.brought), error1 );
+        CHECK( stat_window_display_player(stats_window, serv_process_id, turn_counter, stats.carried, stats.brought, deaths), error1 );
         wrefresh(game_window);
         wrefresh(stats_window);
 

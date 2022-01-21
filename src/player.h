@@ -34,7 +34,7 @@ typedef struct stats_t {
     int carried;
     int brought;
 } stats_t;
-typedef struct server_side_player_t
+typedef struct server_info_t
 {
     point_t curr_location;
     point_t spawn_location;
@@ -44,7 +44,6 @@ typedef struct server_side_player_t
     int serv_to_p_fd;
     int player_num;
     int process_id;
-    bool is_killed;
     bool is_free;
     bool is_currently_in_a_bush;
     bool can_escape_bush;
@@ -54,7 +53,7 @@ typedef struct server_side_player_t
     bool has_sent_stats;
     bool has_sent_map;
     bool has_received_move;
-} server_side_player_t;
+} server_info_t;
 int handle_event(int c, map_point_t map[], player_t * player, player_t * new_player, int map_width);
 int player_move_human(dir_t, player_t * player, player_t * new_player);
 int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, int map_width);

@@ -85,12 +85,11 @@ typedef struct server_side_player_t
     int serv_to_p_fd;
     int player_num;
     int process_id;
-    bool is_killed;
     bool is_free;
     bool is_currently_in_a_bush;
     bool can_escape_bush;
-    int carried;
-    int brought;
+    size_t carried;
+    size_t brought;
     int deaths;
     bool has_sent_stats;
     bool has_sent_map;
@@ -111,19 +110,26 @@ int spawn_beast(beast_tracker_t * beast_tracker);
 int beast_spawn_init(map_point_t map[]);
 int beast_move(map_point_t map[], beast_tracker_t * beast_tracker, map_point_t * beast);
 int handle_beasts(map_point_t map[], beast_tracker_t * beast_tracker);
+//MULTITHREADED BEAST STUFF
+
+//sem_t beast_done_with_tasks_blockade;
+//pthread_mutex_t beast_mutex;
+//int spawn_beast_multithreaded
+//int beast
 
 //PLAYER STUFF
 void player_manager_init();
 void player_send_map_dimensions_internal(int which_player);
 int player_send_map_update(map_point_t map[], int which_player, point_t curr_location);
-void player_send_serverside_stats(int which_player, int carried, int brought, int deaths);
+void player_send_serverside_stats(int which_player, size_t carried, size_t brought, int deaths);
 void player_send_spawn_internal(map_point_t * map, int map_width, int map_length, int which_player);
 void player_receive_move(map_point_t map[],int which_player, int map_width);
+int player_respawn_killed_player_internal(map_point_t map[], point_t new_loc);
 void player_send_turn(int turn_counter, int which_player);
-void player_dropped_coin_spawn(map_point_t map[],point_t drop_location, int carried_coins);
+void player_dropped_coin_spawn(map_point_t map[],point_t drop_location, size_t carried_coins);
 void player_dropped_coin_manager_init();
 int player_dropped_coin_manager_find(point_t dropped_coin_location);
-void player_dropped_coin_remove_and_replace(map_point_t map[], point_t dropped_coin_loc, entity_t replacement_entity);
+void player_dropped_coin_remove(map_point_t map[], point_t dropped_coin_loc);
 //MISC STUFF
 void handle_event(int c, map_point_t map[], beast_tracker_t * beast_tracker);
 void stat_window_display_server(WINDOW * window, int pid, int turn_cnt);
@@ -163,6 +169,7 @@ int main() {
     beast_tracker_t beast_tracker = { .size = 0};
     coin_spawn_init(map);
     beast_spawn_init(map);
+    player_dropped_coin_manager_init();
 
     //required ncurses initialization functions
     ncurses_funcs_init();
@@ -475,7 +482,7 @@ void player_send_map_dimensions_internal(int which_player)
     // as this function is internal, they dont need mutexes, to lock shared resources.
     // the calling function does need them, however.
     int buf = MAP_WIDTH;
-    int err;
+    ssize_t err;
     err = write(playerManager.players[which_player].serv_to_p_fd, &buf, sizeof(int) );
     if( err != sizeof(int))
     {
@@ -529,7 +536,7 @@ int player_send_map_update(map_point_t map[], int which_player, point_t curr_loc
         }
     }
     pthread_mutex_lock(&mutex_player_manag);
-    int err;
+    ssize_t err;
     err = write(playerManager.players[which_player].serv_to_p_fd, map_fragment, sizeof(map_point_t) * map_fragment_size);
     if( err != sizeof(map_point_t) * map_fragment_size)
     {
@@ -542,10 +549,10 @@ int player_send_map_update(map_point_t map[], int which_player, point_t curr_loc
     return 0;
 }
 
-void player_send_serverside_stats(int which_player, int carried, int brought, int deaths)
+void player_send_serverside_stats(int which_player, size_t carried, size_t brought, int deaths)
 {
     pthread_mutex_lock( &mutex_player_manag);
-    int err = write(playerManager.players[which_player].serv_to_p_fd, &brought, sizeof(int));
+    ssize_t err = write(playerManager.players[which_player].serv_to_p_fd, &brought, sizeof(int));
     if(err != sizeof(int))
     {
         pthread_mutex_unlock(&mutex_player_manag);
@@ -573,7 +580,7 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
     point_t old_loc;
     point_t new_loc;
     pthread_mutex_lock(&mutex_player_manag);
-    int err = read(playerManager.players[which_player].p_to_serv_fd, &old_loc, sizeof(point_t));
+    ssize_t err = read(playerManager.players[which_player].p_to_serv_fd, &old_loc, sizeof(point_t));
     if ( err != sizeof(point_t)) {
         pthread_mutex_unlock(&mutex_player_manag);
         return;
@@ -600,22 +607,9 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
     if( map[new_loc.y * MAP_WIDTH + new_loc.x].point_display_entity == ENTITY_WALL) {
         return;
     }
-    //CHECKING IF THE PLAYER IS KILLED: DISALLOWING HIM A MOVE IN CURRENT TURN IF HE IS
-    pthread_mutex_lock(&mutex_player_manag);
-    if(playerManager.players[which_player].is_killed == true)
-    {
-        playerManager.players[which_player].is_killed = false;
-        playerManager.players[which_player].has_received_move = false;
-        pthread_mutex_unlock(&mutex_player_manag);
-        return;
-    }
-    else
-    {
-        pthread_mutex_unlock(&mutex_player_manag);
-    }
 
-    //BUSH HANDLING
     pthread_mutex_lock(&mutex_player_manag);
+    //BUSH HANDLING
     //IF A PLAYER CANT ESCAPE THE BUSH, FUNCTION SETS A FLAG SO HE CAN ESCAPE NEXT TURN
     if( playerManager.players[which_player].is_currently_in_a_bush == true
      && playerManager.players[which_player].can_escape_bush == false)
@@ -626,7 +620,39 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
         return;
     }
     pthread_mutex_unlock(&mutex_player_manag);
+
+    //PLAYER COLLISION AND PLACING ONE OF THE PLAYERS INTO THE SPAWN, SPAWNS A DROPPED COIN ENTITY
+
+    if( map[new_loc.y * map_width + new_loc.x].point_display_entity >= ENTITY_PLAYER_1 &&
+        map[new_loc.y * map_width + new_loc.x].point_display_entity <= ENTITY_PLAYER_4)
+    {
+        pthread_mutex_lock(&mutex_player_manag);
+        int killed_player_index = player_respawn_killed_player_internal(map, new_loc);
+
+
+        size_t monies = playerManager.players[killed_player_index].carried;
+        playerManager.players[killed_player_index].carried = 0;
+        playerManager.players[which_player].has_received_move = true;
+        pthread_mutex_unlock(&mutex_player_manag);
+
+        player_dropped_coin_spawn(map, new_loc, monies);
+        return;
+    }
+    //BEAST COLLISION AND PLACING THE PLAYER INTO THE SPAWN, SPAWNS A DROPPED COIN ENTITY
+    if( map[new_loc.y * map_width + new_loc.x].point_display_entity == ENTITY_BEAST)
+    {
+        pthread_mutex_lock(&mutex_player_manag);
+        playerManager.players[which_player].has_received_move = true;
+        pthread_mutex_unlock(&mutex_player_manag);
+        player_respawn_killed_player_internal(map,old_loc);
+        size_t carried_coins = playerManager.players[which_player].carried;
+        playerManager.players[which_player].carried = 0;
+        player_dropped_coin_spawn(map, old_loc, carried_coins);
+        return;
+    }
+
     //IF THE PLAYER WANTS TO GO INTO THE BUSH THE FUNCTION LETS HIM DO THAT, BUT SETS A FLAG
+
     if( map[new_loc.y * map_width + new_loc.x].point_display_entity == ENTITY_BUSH ||
         map[new_loc.y * map_width + new_loc.x].point_terrain_entity == ENTITY_BUSH)
     {
@@ -635,14 +661,6 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
         playerManager.players[which_player].can_escape_bush = false;
         pthread_mutex_unlock(&mutex_player_manag);
     }
-    //PLAYER COLLISION AND PLACING ONE OF THE PLAYERS INTO THE SPAWN, SPAWNS A DROPPED COIN ENTITY
-
-    if( map[new_loc.y * map_width + new_loc.x].point_display_entity >= ENTITY_PLAYER_1 &&
-        map[new_loc.y * map_width + new_loc.x].point_display_entity <= ENTITY_PLAYER_4)
-    {
-
-    }
-    //BEAST COLLISION AND PLACING THE PLAYER INTO THE SPAWN, SPAWNS A DROPPED COIN ENTITY
 
     //CAMPSITE HANDLING, WHEN PLAYER MOVES INTO A CAMPSITE ALL ITS CARRIED MONEY BECOMES BROUGHT MONEY
     if( map[new_loc.y * map_width + new_loc.x].point_display_entity == ENTITY_CAMPSITE)
@@ -661,21 +679,41 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
     {
         if(map[new_loc.y * map_width + new_loc.x].point_display_entity == ENTITY_COIN_SMALL)
         {
+            pthread_mutex_lock(&mutex_player_manag);
             playerManager.players[which_player].carried += 10;
+            pthread_mutex_unlock(&mutex_player_manag);
         }
         else if(map[new_loc.y * map_width + new_loc.x].point_display_entity == ENTITY_COIN_BIG)
         {
+            pthread_mutex_lock(&mutex_player_manag);
             playerManager.players[which_player].carried += 50;
+            pthread_mutex_unlock(&mutex_player_manag);
         }
         else if(map[new_loc.y * map_width + new_loc.x].point_display_entity == ENTITY_COIN_TREASURE)
         {
+            pthread_mutex_lock(&mutex_player_manag);
             playerManager.players[which_player].carried += 200;
+            pthread_mutex_unlock(&mutex_player_manag);
         }
         else
         {
-            //placeholder
+            pthread_mutex_lock(&mutex_player_manag);
+            int old_x = playerManager.players[which_player].curr_location.x;
+            int old_y = playerManager.players[which_player].curr_location.y;
+
+            map[old_y * map_width + old_x].point_display_entity = map[old_y * map_width + old_x].point_terrain_entity;
+
             int d_index = player_dropped_coin_manager_find(new_loc);
-            playerManager.players[which_player].carried += 1;
+            playerManager.players[which_player].carried += droppedCoinManager.coins[d_index].val;
+            player_dropped_coin_remove(map, new_loc);
+
+            entity_t plr = attribute_list[which_player + 5].entity;
+            map[new_loc.y * map_width + new_loc.x].point_display_entity = plr;
+
+            playerManager.players[which_player].curr_location = new_loc;
+            playerManager.players[which_player].has_received_move = true;
+            pthread_mutex_unlock(&mutex_player_manag);
+            return;
         }
     }
     //PLAYER JUST WANTING TO MOVE TO AN EMPTY TILE
@@ -692,7 +730,53 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
     playerManager.players[which_player].has_received_move = true;
     pthread_mutex_unlock(&mutex_player_manag);
 }
+int player_respawn_killed_player_internal(map_point_t map[], point_t killed_player_loc)
+{
+    int killed_plr_indx = 0;
+    pthread_mutex_lock(&mutex_player_manag);
+    for(int i = 0; i < playerManager.cur_size; i++)
+    {
+        if( playerManager.players[i].curr_location.x == killed_player_loc.x
+            && playerManager.players[i].curr_location.y == killed_player_loc.y)
+        {
+            killed_plr_indx = i;
+            break;
+        }
+    }
+    int old_x = killed_player_loc.x;
+    int old_y = killed_player_loc.y;
+    map[old_y * MAP_WIDTH + old_x].point_display_entity = map[old_y * MAP_WIDTH + old_x].point_terrain_entity;
+    // if the spawn is occupied, we will move right and up to check if there is a free space
+    int spawn_x = playerManager.players[killed_plr_indx].spawn_location.x;
+    int spawn_y = playerManager.players[killed_plr_indx].spawn_location.y;
+    if( map[spawn_y * MAP_WIDTH + spawn_x].point_display_entity == ENTITY_FREE)
+    {
+        playerManager.players[killed_plr_indx].curr_location.x = playerManager.players[killed_plr_indx].spawn_location.x;
+        playerManager.players[killed_plr_indx].curr_location.y = playerManager.players[killed_plr_indx].spawn_location.y;
+    }
+    else
+    {
+        for(int i = 0; i < 4; i++)
+        {
+            for(int j = 0; j < 4; j++)
+            {
+                if(map[(spawn_y + i )* MAP_WIDTH + spawn_x + j].point_display_entity == ENTITY_FREE)
+                {
+                    playerManager.players[killed_plr_indx].curr_location.x = playerManager.players[killed_plr_indx].spawn_location.x + j;
+                    playerManager.players[killed_plr_indx].curr_location.y = playerManager.players[killed_plr_indx].spawn_location.y + i;
+                    break;
+                }
+            }
+        }
+    }
+    entity_t plr = attribute_list[killed_plr_indx + 5].entity;
+    int new_x = playerManager.players[killed_plr_indx].curr_location.x;
+    int new_y = playerManager.players[killed_plr_indx].curr_location.y;
+    map[new_y * MAP_WIDTH + new_x].point_display_entity = plr;
 
+    pthread_mutex_unlock(&mutex_player_manag);
+    return killed_plr_indx;
+}
 void player_send_spawn_internal(map_point_t * map, int map_width, int map_length, int which_player)
 {
     // as this function is internal, they dont need mutexes, to lock shared resources.
@@ -745,7 +829,7 @@ void player_send_turn(int turn_counter, int which_player)
     playerManager.players[which_player].has_sent_stats = false;
 }
 
-void player_dropped_coin_spawn(map_point_t map[],point_t drop_location, int carried_coins)
+void player_dropped_coin_spawn(map_point_t map[],point_t drop_location, size_t carried_coins)
 {
     int cnt = droppedCoinManager.size;
     if(cnt >= 10)
@@ -776,11 +860,13 @@ int player_dropped_coin_manager_find(point_t dropped_coin_location)
     }
     return -1;
 }
-void player_dropped_coin_remove_and_replace(map_point_t map[], point_t dropped_coin_loc, entity_t replacement_entity)
+void player_dropped_coin_remove(map_point_t map[], point_t dropped_coin_loc)
 {
-    int coin_loc_x = dropped_coin_loc.x;
-    int coin_loc_y = dropped_coin_loc.y;
-    map[coin_loc_y * MAP_WIDTH + coin_loc_x].point_display_entity = replacement_entity;
+    int index = player_dropped_coin_manager_find(dropped_coin_loc);
+    int size = droppedCoinManager.size;
+
+    swap(droppedCoinManager.coins[index], droppedCoinManager.coins[size - 1]);
+
     droppedCoinManager.size--;
 }
 // Function that initializes the beastManager variable
