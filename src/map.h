@@ -36,8 +36,8 @@ typedef enum spawner_type
 
 typedef struct point_t
 {
-    unsigned int x;
-    unsigned int y;
+    int x;
+    int y;
 } point_t;
 
 typedef struct map_point_t

@@ -67,8 +67,8 @@ int map_place_fow_player(map_point_t map[], const int MAP_WIDTH, const int MAP_L
         {
             map[i * MAP_WIDTH + j].point_display_entity = ENTITY_UNKNOWN;
             map[i * MAP_WIDTH + j].point_terrain_entity = ENTITY_UNKNOWN;
-            map[i * MAP_WIDTH + j].point.x = (unsigned int) j;
-            map[i * MAP_WIDTH + j].point.y = (unsigned int) i;
+            map[i * MAP_WIDTH + j].point.x = j;
+            map[i * MAP_WIDTH + j].point.y = i;
             map[i * MAP_WIDTH + j].spawnerType = NO_SPAWNER;
         }
     }

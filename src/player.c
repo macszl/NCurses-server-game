@@ -284,7 +284,6 @@ int player_move_human( dir_t dir, player_t * player, player_t * new_player)
 
 int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, int map_width, int map_length)
 {
-    //TODO MAKE IT RUN AWAY FROM THE BEASTS
     if( player->player_loc.y > MAX_MAP_DIMENSION || player->player_loc.x > MAX_MAP_DIMENSION ||
         player->spawn_loc.y > MAX_MAP_DIMENSION || player->spawn_loc.x > MAX_MAP_DIMENSION)
     {
@@ -322,24 +321,24 @@ int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, 
     if(beast_found == true)
     {
         int tile_cnt = 0;
-        map_point_t acceptable_tiles[2];
-        int curr_distance = abs(b_x - p_x) + abs(b_y - p_y);
+        map_point_t acceptable_tiles[4];
+        int curr_distance = abs(p_x - b_x) + abs(p_y - b_y);
 
         for(int i = -1; i <= 1; i++)
         {
-            if ((int) b_y + i >= 0 && (int) b_y + i < map_width) {
+            if ((int) p_y + i >= 0 && (int) p_y + i < map_width) {
                 for (int j = -1; j <= 1; j++) {
-                    if ((int) b_x + j >= 0 && (int) b_x + j < map_length)
+                    if ((int) p_x + j >= 0 && (int) p_x + j < map_length)
                     {
                         if( (i == -1 && j == 0) || (i == 1 && j == 0) || (i == 0 && j == -1) || (i == 0 && j == 1)  )
                         {
-                            if (abs(b_x + j - p_x) + abs(b_y + i - p_y) > curr_distance &&
-                                map[(b_y + i) * map_width + b_x + j].point_display_entity != ENTITY_WALL &&
-                                map[(b_y + i) * map_width + b_x + j].point_display_entity != ENTITY_CAMPSITE &&
-                                map[(b_y + i) * map_width + b_x + j].point_display_entity != ENTITY_BEAST
+                            if (abs(p_x + j - b_x) + abs(p_y + i - b_y) > curr_distance &&
+                                map[(p_y + i) * map_width + p_x + j].point_display_entity != ENTITY_WALL &&
+                                map[(p_y + i) * map_width + p_x + j].point_display_entity != ENTITY_CAMPSITE &&
+                                map[(p_y + i) * map_width + p_x + j].point_display_entity != ENTITY_BEAST
                                     )
                             {
-                                acceptable_tiles[tile_cnt] = map[(b_y + i) * map_width + b_x + j];
+                                acceptable_tiles[tile_cnt] = map[(p_y + i) * map_width + p_x + j];
                                 tile_cnt++;
                             }
                         }
@@ -347,11 +346,17 @@ int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, 
                 }
             }
         }
+        if(tile_cnt != 0){
 
-        int which_tile = rand() % tile_cnt;
+            int which_tile = rand() % tile_cnt;
 
-        new_player->player_loc = acceptable_tiles[which_tile].point;
-
+            new_player->player_loc.x = acceptable_tiles[which_tile].point.x;
+            new_player->player_loc.y = acceptable_tiles[which_tile].point.y;
+        }
+        else
+        {
+            new_player->player_loc = player->player_loc;
+        }
         return 0;
     }
     for(int i = -1; i < 2; i++)
@@ -411,7 +416,7 @@ int server_receive_map_update(map_point_t * map, player_t * player, int fd_read,
 {
     const int map_fragment_size = 26;
     map_point_t map_fragment[map_fragment_size];
-    int err;
+    ssize_t err;
     err = read(fd_read, map_fragment, sizeof(map_point_t) * map_fragment_size);
     if( err != sizeof(map_point_t) * map_fragment_size) {
         fprintf(stderr, "Runtime error: %s returned -1 at %s:%d", strerror(errno),__FILE__, __LINE__);
@@ -431,8 +436,8 @@ int server_receive_map_update(map_point_t * map, player_t * player, int fd_read,
     }
     for(int i = 0; i < map_fragment_size; i++)
     {
-        unsigned int mapf_x = map_fragment[i].point.x;
-        unsigned int mapf_y = map_fragment[i].point.y;
+        int mapf_x = map_fragment[i].point.x;
+        int mapf_y = map_fragment[i].point.y;
         if(mapf_x == 999 && mapf_y == 999) //our 'null terminator', used when against the wall
             break;
         if( map_fragment[i].point_display_entity == player->which_player)
