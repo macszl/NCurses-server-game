@@ -600,11 +600,14 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
     }
     int total_distance_x = abs(new_loc.x - old_loc.x);
     int total_distance_y = abs(new_loc.y - old_loc.y);
-    if(total_distance_x + total_distance_y > 2)
+    int total_distance = total_distance_y + total_distance_x;
+    if(total_distance > 2)
     {
+        playerManager.players[which_player].has_received_move = true;
         return;
     }
     if( map[new_loc.y * MAP_WIDTH + new_loc.x].point_display_entity == ENTITY_WALL) {
+        playerManager.players[which_player].has_received_move = true;
         return;
     }
 
@@ -624,11 +627,10 @@ void player_receive_move(map_point_t map[], int which_player, int map_width)
     //PLAYER COLLISION AND PLACING ONE OF THE PLAYERS INTO THE SPAWN, SPAWNS A DROPPED COIN ENTITY
 
     if( map[new_loc.y * map_width + new_loc.x].point_display_entity >= ENTITY_PLAYER_1 &&
-        map[new_loc.y * map_width + new_loc.x].point_display_entity <= ENTITY_PLAYER_4)
+        map[new_loc.y * map_width + new_loc.x].point_display_entity <= ENTITY_PLAYER_4 && total_distance > 0)
     {
-        pthread_mutex_lock(&mutex_player_manag);
         int killed_player_index = player_respawn_killed_player_internal(map, new_loc);
-
+        pthread_mutex_lock(&mutex_player_manag);
 
         size_t monies = playerManager.players[killed_player_index].carried;
         playerManager.players[killed_player_index].carried = 0;
@@ -916,7 +918,6 @@ int spawn_beast(beast_tracker_t * beast_tracker)
 int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t * beast)
 {
     //TODO Make it multithreaded
-    //TODO MAKE THEM CHASE PLAYERS
     //error checking
     if( beast->point_display_entity != ENTITY_BEAST) {
         return -1;
@@ -936,11 +937,104 @@ int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t
     if(!beast_found)
         return -1;
 
-    //checking which of the 4 sides are occupied
-    map_point_t * possible_locs[4];
+    bool player_found = false;
+    //BEAST CHECKING IF THE PLAYER IS SOMEWHERE NEAR
+
     int locs_cnt = 0;
     int b_x = (int) beast->point.x;
     int b_y = (int) beast->point.y;
+    int p_x = -1;
+    int p_y = -1;
+    for(int i = -2; i <= 2; i++)
+    {
+        if ((int) b_y + i >= 0 && (int) b_y + i < MAP_WIDTH) {
+            for (int j = -2; j <= 2; j++) {
+                if ((int) b_x + j >= 0 && (int) b_x + j < MAP_LENGTH)
+                {
+                    if(map[ (b_y + i) * MAP_WIDTH + b_x + j].point_display_entity >= ENTITY_PLAYER_1 &&
+                       map[ (b_y + i) * MAP_WIDTH + b_x + j].point_display_entity <= ENTITY_PLAYER_4)
+                    {
+                        player_found = true;
+                        p_x = b_x + j;
+                        p_y = b_y + i;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    //BEAST FOUND PLAYER, CHASING PLAYER
+    //BEAST RANDOMLY CHOOSES A TILE WHICH DECREASES ITS DISTANCE TO THE PLAYER
+    if(player_found)
+    {
+        int tile_cnt = 0;
+        map_point_t acceptable_tiles[2];
+        int curr_distance = abs(b_x - p_x) + abs(b_y - p_y);
+
+        for(int i = -1; i <= 1; i++)
+        {
+            if ((int) b_y + i >= 0 && (int) b_y + i < MAP_WIDTH) {
+                for (int j = -1; j <= 1; j++) {
+                    if ((int) b_x + j >= 0 && (int) b_x + j < MAP_LENGTH)
+                    {
+                        if( (i == -1 && j == 0) || (i == 1 && j == 0) || (i == 0 && j == -1) || (i == 0 && j == 1)  )
+                        {
+                            if (abs(b_x + j - p_x) + abs(b_y + i - p_y) < curr_distance &&
+                            (  map[(b_y + i) * MAP_WIDTH + b_x + j].point_display_entity == ENTITY_FREE
+                            || is_player(map[(b_y + i) * MAP_WIDTH + b_x + j]) ) )
+                            {
+                                acceptable_tiles[tile_cnt] = map[(b_y + i) * MAP_WIDTH + b_x + j];
+                                tile_cnt++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for(int i = 0; i < tile_cnt; i++)
+        {
+            if(is_player(acceptable_tiles[i]) )
+            {
+                //finding player and then killing him and making him respawn in a different place
+                int which_player;
+                pthread_mutex_lock(&mutex_player_manag);
+                point_t old_loc;
+                for(int j = 0; i < playerManager.cur_size; j++)
+                {
+                    if(playerManager.players[j].curr_location.x == acceptable_tiles[i].point.x &&
+                       playerManager.players[j].curr_location.y == acceptable_tiles[i].point.y)
+                    {
+                        which_player = j;
+                        old_loc = playerManager.players[i].curr_location;
+                    }
+                }
+                playerManager.players[which_player].has_received_move = true;
+                size_t carried_coins = playerManager.players[which_player].carried;
+                playerManager.players[which_player].carried = 0;
+                pthread_mutex_unlock(&mutex_player_manag);
+                player_respawn_killed_player_internal(map,old_loc);
+
+                player_dropped_coin_spawn(map, old_loc, carried_coins);
+                return 0;
+            }
+        }
+
+        //just moving to one of the tiles
+
+        int which_tile = rand() % tile_cnt;
+
+        beast->point_display_entity = ENTITY_FREE;
+
+        unsigned int tile_x = acceptable_tiles[which_tile].point.x;
+        unsigned int tile_y = acceptable_tiles[which_tile].point.y;
+        beast_tracker->beasts[beast_tracker_index] = &map[ tile_y * MAP_WIDTH + tile_x];
+        beast_tracker->beasts[beast_tracker_index]->point_display_entity = ENTITY_BEAST;
+
+        return 0;
+    }
+    //RANDOM MOVEMENT FOR THE BEAST IF IT DIDNT FIND THE PLAYER
+    map_point_t * possible_locs[4];
     for(int i = -1; i < 2; i++)
     {
         for(int j = -1; j < 2; j++)

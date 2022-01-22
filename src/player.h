@@ -54,9 +54,9 @@ typedef struct server_info_t
     bool has_sent_map;
     bool has_received_move;
 } server_info_t;
-int handle_event(int c, map_point_t map[], player_t * player, player_t * new_player, int map_width);
+int handle_event(int c, map_point_t map[], player_t * player, player_t * new_player, int map_width, int map_length);
 int player_move_human(dir_t, player_t * player, player_t * new_player);
-int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, int map_width);
+int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, int map_width, int map_length);
 
 int server_receive_map_dimensions(int * map_width_p, int * map_length_p, int fd_read);
 int server_receive_map_update(map_point_t * map, player_t * player, int fd_read, int map_width);

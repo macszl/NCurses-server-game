@@ -22,8 +22,8 @@ bool PLAYER_QUIT = false;
 void *input_routine(void *input_storage);
 
 pthread_mutex_t mutex_input = PTHREAD_MUTEX_INITIALIZER;
-sem_t input_found_blockade;
-
+sem_t input_done_processing_blockade;
+//sem_t input_started_processing_blockade;
 int main() {
     ncurses_funcs_init();
     srand((unsigned int) time(NULL));
@@ -33,7 +33,8 @@ int main() {
     pid_t pid = getpid();
 
     int input = NO_INPUT;
-    sem_init(&input_found_blockade, 0 ,0);
+    sem_init(&input_done_processing_blockade, 0 ,0);
+    //sem_init(&input_started_processing_blockade, 0 ,0);
     pthread_t thread1;
     pthread_create(&thread1, NULL, input_routine, &input);
 
@@ -69,7 +70,7 @@ int main() {
     {
         fprintf(stderr, "Opening fd_read failed.\n");
         pthread_mutex_destroy(&mutex_input);
-        sem_destroy(&input_found_blockade);
+        sem_destroy(&input_done_processing_blockade);
         endwin();
         return -1;
     }
@@ -79,7 +80,7 @@ int main() {
         fprintf(stderr, "Opening fd_write failed.\n");
         close(fd_read);
         pthread_mutex_destroy(&mutex_input);
-        sem_destroy(&input_found_blockade);
+        sem_destroy(&input_done_processing_blockade);
         endwin();
         return -1;
     }
@@ -114,50 +115,47 @@ int main() {
     while(!PLAYER_QUIT)
     {
         map_place_fow_player(map, map_width, map_length);
-        wrefresh(game_window);
-        wrefresh(stats_window);
 
         CHECK( server_receive_serverside_stats(&stats, fd_read, &deaths), error1);
-        wrefresh(game_window);
-        wrefresh(stats_window);
 
         CHECK( server_receive_map_update(map, &player, fd_read, map_width), error1);
-        wrefresh(game_window);
-        wrefresh(stats_window);
-
+        new_player.player_loc.x = player.player_loc.x;
+        new_player.player_loc.y = player.player_loc.y;
         CHECK (render_map(map, game_window, map_width, map_length), error1 );
         wrefresh(game_window);
-        wrefresh(stats_window);
 
         CHECK( stat_window_display_player(stats_window, serv_process_id, turn_counter, stats.carried, stats.brought, deaths), error1 );
-        wrefresh(game_window);
         wrefresh(stats_window);
 
+        //sem_wait(&input_started_processing_blockade);
         pthread_mutex_lock(&mutex_input);
         if(input == (int) 'q' || input == (int) 'Q')
         {
-            sem_post(&input_found_blockade);
+            sem_post(&input_done_processing_blockade);
+            pthread_mutex_unlock(&mutex_input);
             break;
         }
-        else if(input == (int) 'a' || input == (int) 'A') {
+        else if( input == 'a' || input == 'A')
+        {
             CPU_MODE = !CPU_MODE;
         }
-        pthread_mutex_unlock(&mutex_input);
 
-        pthread_mutex_lock(&mutex_input);
         if(CPU_MODE == true)
         {
-            CHECK( handle_event( CPU_INPUT, map, &player, &new_player,map_width), error1 );
+            CHECK( handle_event( CPU_INPUT, map, &player, &new_player,map_width, map_length), error1 );
             pthread_mutex_unlock(&mutex_input);
-            sem_post(&input_found_blockade);
+            if(input != NO_INPUT)
+            {
+                sem_post(&input_done_processing_blockade);
+            }
         }
         else
         {
             if(input != NO_INPUT)
             {
-                CHECK (handle_event(input, map, &player, &new_player, map_width), error1);
+                CHECK (handle_event(input, map, &player, &new_player, map_width, map_length), error1);
                 pthread_mutex_unlock(&mutex_input);
-                sem_post(&input_found_blockade);
+                sem_post(&input_done_processing_blockade);
             }
             else
             {
@@ -172,8 +170,6 @@ int main() {
         }
 
         CHECK ( server_send_move( &player, &new_player, fd_write), error1);
-        wrefresh(game_window);
-        wrefresh(stats_window);
         CHECK( server_receive_turn_counter(&turn_counter, fd_read), error1);
         iter++;
     }
@@ -185,7 +181,7 @@ int main() {
     PLAYER_QUIT = true;
     pthread_join(thread1, NULL);
     pthread_mutex_destroy(&mutex_input);
-    sem_destroy(&input_found_blockade);
+    sem_destroy(&input_done_processing_blockade);
     endwin();
     return 0;
 
@@ -194,10 +190,10 @@ int main() {
     close(fd_write);
     close(fd_read);
     PLAYER_QUIT = true;
-    sem_post(&input_found_blockade);
+    sem_post(&input_done_processing_blockade);
     pthread_join(thread1, NULL);
     pthread_mutex_destroy(&mutex_input);
-    sem_destroy(&input_found_blockade);
+    sem_destroy(&input_done_processing_blockade);
     endwin();
     return 0;
 
@@ -206,10 +202,10 @@ int main() {
     close(fd_write);
     close(fd_read);
     PLAYER_QUIT = true;
-    sem_post(&input_found_blockade);
+    sem_post(&input_done_processing_blockade);
     pthread_join(thread1, NULL);
     pthread_mutex_destroy(&mutex_input);
-    sem_destroy(&input_found_blockade);
+    sem_destroy(&input_done_processing_blockade);
     endwin();
     return -1;
 
@@ -219,16 +215,16 @@ int main() {
     close(fd_read);
     close(fd_write);
     PLAYER_QUIT = true;
-    sem_post(&input_found_blockade);
+    sem_post(&input_done_processing_blockade);
     pthread_join(thread1, NULL);
     pthread_mutex_destroy(&mutex_input);
-    sem_destroy(&input_found_blockade);
+    sem_destroy(&input_done_processing_blockade);
     endwin();
     return -1;
 
 }
 
-int handle_event(int c, map_point_t map[], player_t * player, player_t * new_player, int map_width)
+int handle_event(int c, map_point_t map[], player_t * player, player_t * new_player, int map_width, int map_length)
 {
     switch (c) {
         case KEY_RIGHT:
@@ -240,7 +236,7 @@ int handle_event(int c, map_point_t map[], player_t * player, player_t * new_pla
         case KEY_UP:
             return player_move_human (UP, player, new_player);
         case CPU_INPUT:
-            return player_move_cpu (map, player,  new_player, map_width);
+            return player_move_cpu (map, player,  new_player, map_width, map_length);
         default:
             break;
     }
@@ -250,7 +246,7 @@ int handle_event(int c, map_point_t map[], player_t * player, player_t * new_pla
 int player_move_human( dir_t dir, player_t * player, player_t * new_player)
 {
 
-    int p_x = (int )player->player_loc.y;
+    int p_x = (int )player->player_loc.x;
     int p_y = (int )player->player_loc.y;
     if( p_y < 0 || p_x < 0 || p_x > MAX_MAP_DIMENSION || p_y > MAX_MAP_DIMENSION)
     {
@@ -286,7 +282,7 @@ int player_move_human( dir_t dir, player_t * player, player_t * new_player)
     return 0;
 }
 
-int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, int map_width)
+int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, int map_width, int map_length)
 {
     //TODO MAKE IT RUN AWAY FROM THE BEASTS
     if( player->player_loc.y > MAX_MAP_DIMENSION || player->player_loc.x > MAX_MAP_DIMENSION ||
@@ -298,9 +294,65 @@ int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, 
     int locs_cnt = 1;
     int p_x = (int) player->player_loc.x;
     int p_y = (int) player->player_loc.y;
-
+    int b_x;
+    int b_y;
+    bool beast_found = false;
     if( p_x > MAX_MAP_DIMENSION || p_y > MAX_MAP_DIMENSION) {
         return -1;
+    }
+
+    for(int i = -2; i <= 2; i++)
+    {
+        if ((int) p_y + i >= 0 && (int) p_y + i < map_width) {
+            for (int j = -2; j <= 2; j++) {
+                if ((int) p_x + j >= 0 && (int) p_x + j < map_length)
+                {
+                    if(map[ (p_y + i) * map_width + p_x + j].point_display_entity == ENTITY_BEAST)
+                    {
+                        beast_found = true;
+                        b_x = p_x + j;
+                        b_y = p_y + i;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if(beast_found == true)
+    {
+        int tile_cnt = 0;
+        map_point_t acceptable_tiles[2];
+        int curr_distance = abs(b_x - p_x) + abs(b_y - p_y);
+
+        for(int i = -1; i <= 1; i++)
+        {
+            if ((int) b_y + i >= 0 && (int) b_y + i < map_width) {
+                for (int j = -1; j <= 1; j++) {
+                    if ((int) b_x + j >= 0 && (int) b_x + j < map_length)
+                    {
+                        if( (i == -1 && j == 0) || (i == 1 && j == 0) || (i == 0 && j == -1) || (i == 0 && j == 1)  )
+                        {
+                            if (abs(b_x + j - p_x) + abs(b_y + i - p_y) > curr_distance &&
+                                map[(b_y + i) * map_width + b_x + j].point_display_entity != ENTITY_WALL &&
+                                map[(b_y + i) * map_width + b_x + j].point_display_entity != ENTITY_CAMPSITE &&
+                                map[(b_y + i) * map_width + b_x + j].point_display_entity != ENTITY_BEAST
+                                    )
+                            {
+                                acceptable_tiles[tile_cnt] = map[(b_y + i) * map_width + b_x + j];
+                                tile_cnt++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        int which_tile = rand() % tile_cnt;
+
+        new_player->player_loc = acceptable_tiles[which_tile].point;
+
+        return 0;
     }
     for(int i = -1; i < 2; i++)
     {
@@ -481,7 +533,7 @@ void *input_routine(void *input_storage) {
             pthread_mutex_lock(&mutex_input);
             *(int *) input_storage = (int) c;
             pthread_mutex_unlock(&mutex_input);
-            sem_wait(&input_found_blockade);
+            sem_wait(&input_done_processing_blockade);
             if ( c ==  'q' ) {
                 break;
             }else {
