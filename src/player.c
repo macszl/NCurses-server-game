@@ -94,6 +94,7 @@ int main() {
 
     stats_t stats;
     player_t player;
+    int deaths;
     CHECK(server_receive_spawn(&player, map,fd_read, map_width), error1);
     player.which_player = player_num;
 
@@ -110,14 +111,13 @@ int main() {
 
     int turn_counter = 0;
     int iter = 0;
-    int deaths = 0;
     while(!PLAYER_QUIT)
     {
         map_place_fow_player(map, map_width, map_length);
         wrefresh(game_window);
         wrefresh(stats_window);
 
-        CHECK( server_receive_serverside_stats(&stats, fd_read), error1);
+        CHECK( server_receive_serverside_stats(&stats, fd_read, &deaths), error1);
         wrefresh(game_window);
         wrefresh(stats_window);
 
@@ -408,7 +408,7 @@ int server_receive_spawn(player_t * player, map_point_t * map, int fd_read, int 
     map[buf.point.y * map_width + buf.point.x].spawnerType = buf.spawnerType;
     return 0;
 }
-int server_receive_serverside_stats(stats_t * stats_p, int fd_read)
+int server_receive_serverside_stats(stats_t * stats_p, int fd_read, int * deaths)
 {
 
     int buf;
@@ -421,6 +421,11 @@ int server_receive_serverside_stats(stats_t * stats_p, int fd_read)
         return -1;
     }
     stats_p->carried = buf;
+
+    if (read(fd_read, &buf, sizeof(int) ) != sizeof(int)) {
+        return -1;
+    }
+    *deaths = buf;
 
     return 0;
 }

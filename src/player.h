@@ -61,7 +61,7 @@ int player_move_cpu(map_point_t* map, player_t * player, player_t * new_player, 
 int server_receive_map_dimensions(int * map_width_p, int * map_length_p, int fd_read);
 int server_receive_map_update(map_point_t * map, player_t * player, int fd_read, int map_width);
 int server_receive_spawn(player_t * player,map_point_t * map, int fd_read , int map_width);
-int server_receive_serverside_stats(stats_t * stats_p, int fd_read);
+int server_receive_serverside_stats(stats_t * stats_p, int fd_read, int * deaths);
 int server_send_move(player_t * player_before_move, player_t * player_after_move, int fd_write);
 int server_receive_turn_counter(int * turn_counter_p, int fd_read);
 #endif //NCURSES_SERVER_GAME_PLAYER_H
