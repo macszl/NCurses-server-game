@@ -105,6 +105,23 @@ typedef struct player_manager_t
     server_side_player_t players[4];
     int cur_size;
 } player_manager_t;
+//CONTROL STRUCT FOR THE THREADS DEDICATED TO THE BEASTS
+typedef struct mt_beast_manager_t
+{
+    sem_t input_done_blockades[TOTAL_BEAST_LIMIT];
+    sem_t start_blockades[TOTAL_BEAST_LIMIT];
+    pthread_t beast_threads[TOTAL_BEAST_LIMIT];
+    int cur_size;
+} mt_beast_manager_t;
+
+typedef struct beast_move_params_t
+{
+    beast_tracker_t * beast_tracker;
+    map_point_t * beast;
+    map_point_t * map;
+    sem_t * beast_done_blockade;
+} beast_move_params_t;
+
 //COIN MANAGEMENT STUFF
 void spawn_coin(entity_t coin_size, map_point_t map[]);
 int coin_spawn_init(map_point_t map[]);
@@ -114,12 +131,30 @@ int spawn_beast(beast_tracker_t * beast_tracker);
 int beast_spawn_init(map_point_t map[]);
 int beast_move(map_point_t map[], beast_tracker_t * beast_tracker, map_point_t * beast);
 int handle_beasts(map_point_t map[], beast_tracker_t * beast_tracker);
-//MULTITHREADED BEAST STUFF
+//TODO MULTITHREADED BEAST STUFF
 
-//sem_t beast_done_with_tasks_blockade;
-//pthread_mutex_t beast_mutex;
-//int spawn_beast_multithreaded
-//int beast
+//something that tracks the beasts on the map - perhaps use the old beast_tracker struct?
+
+//something that tracks the spawners on the map - perhaps use the old beast_spawn_manager struct?
+
+int mt_beast_manager_init();
+//*** SETTING THE SIZE TO 0(EMPTY ARRAY, NO BEASTS ON THE MAP)
+//*** ALSO CALLING SEM_INIT ON EVERY SEMAPHORE IN THE CONTROL STRUCT
+
+int mt_spawn_beast(beast_tracker_t * beast_tracker);
+//*** THE SPAWN_BEAST_MULTITHREADED FUNCTION SHOULD CONTAIN A PTHREAD_CREATE.
+//*** IT SHOULD FAIL THE CALL AND RETURN AN ERROR IF THE THREAD LIMIT / BEAST LIMIT IS REACHED.
+//*** IT SHOULD ALSO CHANGE THE N VALUE.
+
+void mt_beast_release_all();
+//*** THE FUNCTION SHOULD RELEASE(POST) THE SEMAPHORES ON ALL WAITING BEASTS
+
+point_t mt_beast_player_find_internal(map_point_t * map, int b_y, int b_x);
+void mt_beast_choose_tiles_internal(point_t beast_loc, point_t player_loc, map_point_t * map,
+                                    int * tile_cnt, int curr_distance, map_point_t * acceptable_tiles);
+//UTILIY FUNCTIONS FOR BEAST_MOVE
+
+
 
 //PLAYER STUFF
 void player_manager_init();
@@ -142,18 +177,32 @@ void *input_routine(void *input_storage);
 void *listening_join_routine(void * param);
 void *listening_disconnect_routine(void * param);
 
+void* mt_beast_move_routine(void * params);
+//*** THE FUNCTION THAT MOVES THE BEAST. SAME RULES AS THE SINGLETHREADED BEAST.
+//*** THE SHOULD BE DONE SEQUENTIALLY. EACH AND EVERY ONE SHOULD MOVE ONLY ONCE, DURING A GIVEN TURN.
+//*** EXAMPLE: BEAST1 moves, then gets blocked, BEAST2 moves, then gets blocked, BEAST 3 moves, then gets blocked,
+//*** All the beasts are blocked, awaiting on signal that releases them from the main thread
+//*** SHOULD CONSIST OF AN INFINITE WHILE LOOP AND BREAKS THAT TERMINATE THE LOOP.
+
 coin_spawn_manager_t coinSpawnManager;
 beast_spawn_manager_t beastSpawnManager;
 player_manager_t playerManager;
 dropped_coin_manager_t droppedCoinManager;
+mt_beast_manager_t mtBeastManager;
 
 pthread_mutex_t mutex_input = PTHREAD_MUTEX_INITIALIZER;
 sem_t input_found_blockade;
 pthread_mutex_t mutex_player_manag = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t beast_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t beast_done_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t  beast_done_cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t beast_thread_count_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+int threads_working = 0;
 bool user_did_not_quit = true;
 bool listening_join_routine_not_terminated = true;
 bool disconnect_routine_not_terminated = true;
+bool beasts_not_terminated = true;
 
 int main() {
     srand((unsigned int) time(NULL));
@@ -223,8 +272,15 @@ int main() {
             pthread_mutex_unlock(&mutex_input);
         }
 
+        // RELEASING THE SEMAPHORE LOCKS IN EACH BEAST THREAD SO THAT THE BEASTS MIGHT BEGIN WORKING
+        mt_beast_release_all();
 
-        handle_beasts(map, &beast_tracker);
+        // THIS COND_WAIT BLOCKS THE MAIN THREAD UNTIL ALL THE BEASTS ARE DONE WORKING.
+        pthread_mutex_lock(&beast_thread_count_mutex);
+        while(threads_working != 0)
+        {
+            pthread_cond_wait(&beast_done_cond, &beast_thread_count_mutex);
+        }
 
         //handle_players
         for(int i = 0; i < 4; i++)
@@ -294,7 +350,7 @@ void handle_event(int c, map_point_t map[], beast_tracker_t * beast_tracker)
         case 'B':
         case 'b':
         {
-            spawn_beast(beast_tracker);
+            mt_spawn_beast(beast_tracker);
             break;
         }
         case 'c':
@@ -442,6 +498,204 @@ void * listening_disconnect_routine(void * params)
     return NULL;
 }
 
+void * mt_beast_move_routine(void * params)
+{
+    beast_move_params_t * temp = (beast_move_params_t *) params;
+
+    map_point_t * map = temp->map;
+    map_point_t * beast = temp->beast;
+    beast_tracker_t * beast_tracker = temp->beast_tracker;
+    sem_t * beast_done_blockade = temp->beast_done_blockade;
+    sem_t * start_blockade;
+    while(true)
+    {
+        pthread_mutex_lock(&beast_mutex);
+        if(!beasts_not_terminated)
+        {
+            pthread_mutex_unlock(&beast_mutex);
+            break;
+        }
+
+
+        //stuff
+        //error checking
+        if( beast->point_display_entity != ENTITY_BEAST) {
+            return NULL;
+        }
+        int beast_tracker_index = 0;
+        bool beast_found = false;
+        for(int i = 0; i < beast_tracker->size; i++)
+        {
+            if( beast_tracker->beasts[i] == beast)
+            {
+                beast_found = true;
+                break;
+            }
+            beast_tracker_index++;
+        }
+        if(!beast_found) {
+            return NULL;
+        }
+        bool player_found = false;
+        //BEAST CHECKING IF THE PLAYER IS SOMEWHERE NEAR
+
+        int locs_cnt = 0;
+        int b_x = (int) beast->point.x, b_y = (int) beast->point.y;
+        int p_x = -1, p_y = -1;
+        point_t plr = mt_beast_player_find_internal(map, b_x, b_y);
+        if(plr.x != -1 && plr.y != -1)
+        {
+            player_found = true;
+            p_x = plr.x;
+            p_y = plr.y;
+        }
+        //BEAST FOUND PLAYER, CHASING PLAYER
+        //BEAST RANDOMLY CHOOSES A TILE WHICH DECREASES ITS DISTANCE TO THE PLAYER
+        if(player_found)
+        {
+            int tile_cnt = 0;
+            map_point_t acceptable_tiles[2];
+            int curr_distance = abs(b_x - p_x) + abs(b_y - p_y);
+            point_t bst = { .y = b_y, .x = b_x};
+            mt_beast_choose_tiles_internal(bst, plr, map, &tile_cnt, curr_distance, acceptable_tiles);
+            bool can_kill_player = false;
+            int plr_tile = 0;
+            for(int i = 0; i < tile_cnt; i++)
+            {
+                if(is_player(acceptable_tiles[i]) )
+                {
+                    plr_tile = i;
+                    can_kill_player = true;
+                    break;
+                }
+            }
+
+            if(can_kill_player) {
+                //finding player and then killing him and making him respawn in a different place
+                int which_player;
+                pthread_mutex_lock(&mutex_player_manag);
+                point_t old_loc;
+                for (int j = 0; j < playerManager.cur_size; j++) {
+                    if (playerManager.players[j].curr_location.x == acceptable_tiles[plr_tile].point.x &&
+                        playerManager.players[j].curr_location.y == acceptable_tiles[plr_tile].point.y) {
+                        which_player = j;
+                        old_loc = playerManager.players[plr_tile].curr_location;
+                    }
+                }
+                playerManager.players[which_player].has_received_move = true;
+                size_t carried_coins = playerManager.players[which_player].carried;
+                playerManager.players[which_player].carried = 0;
+                pthread_mutex_unlock(&mutex_player_manag);
+                player_respawn_killed_player_internal(map, old_loc);
+
+                player_dropped_coin_spawn(map, old_loc, carried_coins);
+
+                pthread_mutex_lock(&beast_thread_count_mutex);
+                threads_working = threads_working - 1;
+                pthread_mutex_unlock(&beast_thread_count_mutex);
+
+                pthread_mutex_unlock(&beast_mutex);
+                sem_wait(beast_done_blockade);
+                continue;
+            }
+            //just moving to one of the tiles
+
+            int which_tile = rand() % tile_cnt;
+
+            beast->point_display_entity = ENTITY_FREE;
+
+            int tile_x = acceptable_tiles[which_tile].point.x;
+            int tile_y = acceptable_tiles[which_tile].point.y;
+            beast_tracker->beasts[beast_tracker_index] = &map[ tile_y * MAP_WIDTH + tile_x];
+            beast_tracker->beasts[beast_tracker_index]->point_display_entity = ENTITY_BEAST;
+
+            pthread_mutex_lock(&beast_thread_count_mutex);
+            threads_working = threads_working - 1;
+            pthread_mutex_unlock(&beast_thread_count_mutex);
+
+            pthread_mutex_unlock(&beast_mutex);
+            sem_wait(beast_done_blockade);
+            continue;
+        }
+
+        //RANDOM MOVEMENT FOR THE BEAST IF IT DIDNT FIND THE PLAYER
+        map_point_t * possible_locs[4];
+        for(int i = -1; i < 2; i++)
+        {
+            for(int j = -1; j < 2; j++)
+            {
+                if( (i == -1 && j == 0) || (i == 1 && j == 0) || (i == 0 && j == -1) || (i == 0 && j == 1)  )
+                {
+                    if (map[(b_y + i) * MAP_WIDTH + b_x + j].point_display_entity == ENTITY_FREE)
+                    {
+                        possible_locs[locs_cnt] = &map[(b_y + i) * MAP_WIDTH + b_x + j];
+                        locs_cnt++;
+                    }
+                }
+            }
+        }
+        if(locs_cnt != 0) {
+            int which_loc = rand() % locs_cnt;
+            possible_locs[which_loc]->point_display_entity = ENTITY_BEAST;
+            beast->point_display_entity = ENTITY_FREE;
+
+            beast_tracker->beasts[beast_tracker_index] = possible_locs[which_loc];
+        }
+        pthread_mutex_lock(&beast_thread_count_mutex);
+        threads_working = threads_working - 1;
+        pthread_mutex_unlock(&beast_thread_count_mutex);
+
+        pthread_mutex_unlock(&beast_mutex);
+        sem_wait(beast_done_blockade);
+    }
+
+    return NULL;
+}
+
+int mt_spawn_beast(beast_tracker_t * beast_tracker)
+{
+    int size = mtBeastManager.cur_size;
+
+    if(beast_tracker->size < 0 || beast_tracker->size == TOTAL_BEAST_LIMIT || beastSpawnManager.free_spawners == 0)
+    {
+        return -1;
+    }
+    int which_beast_spawner = rand() % beastSpawnManager.free_spawners;
+    beastSpawnManager.spawner_array[which_beast_spawner]->point_display_entity = ENTITY_BEAST;
+    int loc = beastSpawnManager.free_spawners - 1;
+    swap(beastSpawnManager.spawner_array[which_beast_spawner], beastSpawnManager.spawner_array[loc]);
+    beastSpawnManager.free_spawners--;
+
+    beast_tracker->beasts[beast_tracker->size] = beastSpawnManager.spawner_array[loc];
+    beast_tracker->size = beast_tracker->size + 1;
+
+    //pthread_join
+
+    mtBeastManager.cur_size = mtBeastManager.cur_size + 1;
+    return 0;
+}
+
+void mt_beast_release_all()
+{
+    pthread_mutex_lock(&beast_thread_count_mutex);
+    threads_working = mtBeastManager.cur_size;
+    pthread_mutex_unlock(&beast_thread_count_mutex);
+    for(int i = 0; i < mtBeastManager.cur_size; i++)
+    {
+        sem_post( &mtBeastManager.input_done_blockades[i]);
+    }
+}
+int mt_beast_manager_init()
+{
+    for(int i = 0; i < TOTAL_BEAST_LIMIT; i++)
+    {
+        sem_init(&mtBeastManager.input_done_blockades[i], 0, 0);
+        sem_init(&mtBeastManager.start_blockades[i], 0, 0);
+    }
+    mtBeastManager.cur_size = 0;
+
+    return 0;
+}
 void player_manager_init()
 {
     for(int i = 0; i < 4; i++)
@@ -480,7 +734,64 @@ void player_manager_init()
         }
     }
 }
+point_t mt_beast_player_find_internal(map_point_t * map, int b_y, int b_x)
+{
+    point_t return_val;
+    int p_x = -1, p_y = -1;
+    bool player_found;
+    for(int i = -2; i <= 2; i++)
+    {
+        if ((int) b_y + i >= 0 && (int) b_y + i < MAP_WIDTH) {
+            for (int j = -2; j <= 2; j++) {
+                if ((int) b_x + j >= 0 && (int) b_x + j < MAP_LENGTH)
+                {
+                    if(map[ (b_y + i) * MAP_WIDTH + b_x + j].point_display_entity >= ENTITY_PLAYER_1 &&
+                       map[ (b_y + i) * MAP_WIDTH + b_x + j].point_display_entity <= ENTITY_PLAYER_4)
+                    {
+                        player_found = true;
+                        p_x = b_x + j;
+                        p_y = b_y + i;
+                        break;
+                    }
+                }
+            }
+        }
+        if(player_found == true)
+        {
+            break;
+        }
+    }
+    return_val.x = p_x;
+    return_val.y = p_y;
+    return return_val;
+}
 
+void mt_beast_choose_tiles_internal(point_t beast_loc, point_t player_loc, map_point_t * map,
+                                    int * tile_cnt, int curr_distance, map_point_t * acceptable_tiles)
+{
+    int b_y = beast_loc.y, b_x = beast_loc.x;
+    int p_y = player_loc.y, p_x = player_loc.x;
+    for(int i = -1; i <= 1; i++)
+    {
+        if ((int) b_y + i >= 0 && (int) b_y + i < MAP_WIDTH) {
+            for (int j = -1; j <= 1; j++) {
+                if ((int) b_x + j >= 0 && (int) b_x + j < MAP_LENGTH)
+                {
+                    if( (i == -1 && j == 0) || (i == 1 && j == 0) || (i == 0 && j == -1) || (i == 0 && j == 1)  )
+                    {
+                        if (abs(b_x + j - p_x) + abs(b_y + i - p_y) < curr_distance &&
+                            (  map[(b_y + i) * MAP_WIDTH + b_x + j].point_display_entity == ENTITY_FREE
+                               || is_player(map[(b_y + i) * MAP_WIDTH + b_x + j]) ) )
+                        {
+                            acceptable_tiles[*tile_cnt] = map[(b_y + i) * MAP_WIDTH + b_x + j];
+                            *tile_cnt = *tile_cnt + 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 void player_send_map_dimensions_internal(int which_player)
 {
     // as this function is internal, they dont need mutexes, to lock shared resources.
@@ -918,7 +1229,7 @@ int spawn_beast(beast_tracker_t * beast_tracker)
 }
 int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t * beast)
 {
-    //TODO Make it multithreaded
+
     //error checking
     if( beast->point_display_entity != ENTITY_BEAST) {
         return -1;
@@ -944,96 +1255,96 @@ int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t
     int locs_cnt = 0;
     int b_x = (int) beast->point.x;
     int b_y = (int) beast->point.y;
-//    int p_x = -1;
-//    int p_y = -1;
-//    for(int i = -2; i <= 2; i++)
-//    {
-//        if ((int) b_y + i >= 0 && (int) b_y + i < MAP_WIDTH) {
-//            for (int j = -2; j <= 2; j++) {
-//                if ((int) b_x + j >= 0 && (int) b_x + j < MAP_LENGTH)
-//                {
-//                    if(map[ (b_y + i) * MAP_WIDTH + b_x + j].point_display_entity >= ENTITY_PLAYER_1 &&
-//                       map[ (b_y + i) * MAP_WIDTH + b_x + j].point_display_entity <= ENTITY_PLAYER_4)
-//                    {
-//                        player_found = true;
-//                        p_x = b_x + j;
-//                        p_y = b_y + i;
-//                        break;
-//                    }
-//                }
-//            }
-//        }
-//    }
-//    //BEAST FOUND PLAYER, CHASING PLAYER
-//    //BEAST RANDOMLY CHOOSES A TILE WHICH DECREASES ITS DISTANCE TO THE PLAYER
-//    if(player_found)
-//    {
-//        int tile_cnt = 0;
-//        map_point_t acceptable_tiles[2];
-//        int curr_distance = abs(b_x - p_x) + abs(b_y - p_y);
-//
-//        for(int i = -1; i <= 1; i++)
-//        {
-//            if ((int) b_y + i >= 0 && (int) b_y + i < MAP_WIDTH) {
-//                for (int j = -1; j <= 1; j++) {
-//                    if ((int) b_x + j >= 0 && (int) b_x + j < MAP_LENGTH)
-//                    {
-//                        if( (i == -1 && j == 0) || (i == 1 && j == 0) || (i == 0 && j == -1) || (i == 0 && j == 1)  )
-//                        {
-//                            if (abs(b_x + j - p_x) + abs(b_y + i - p_y) < curr_distance &&
-//                            (  map[(b_y + i) * MAP_WIDTH + b_x + j].point_display_entity == ENTITY_FREE
-//                            || is_player(map[(b_y + i) * MAP_WIDTH + b_x + j]) ) )
-//                            {
-//                                acceptable_tiles[tile_cnt] = map[(b_y + i) * MAP_WIDTH + b_x + j];
-//                                tile_cnt++;
-//                            }
-//                        }
-//                    }
-//                }
-//            }
-//        }
-//
-//        for(int i = 0; i < tile_cnt; i++)
-//        {
-//            if(is_player(acceptable_tiles[i]) )
-//            {
-//                //finding player and then killing him and making him respawn in a different place
-//                int which_player;
-//                pthread_mutex_lock(&mutex_player_manag);
-//                point_t old_loc;
-//                for(int j = 0; j < playerManager.cur_size; j++)
-//                {
-//                    if(playerManager.players[j].curr_location.x == acceptable_tiles[i].point.x &&
-//                       playerManager.players[j].curr_location.y == acceptable_tiles[i].point.y)
-//                    {
-//                        which_player = j;
-//                        old_loc = playerManager.players[i].curr_location;
-//                    }
-//                }
-//                playerManager.players[which_player].has_received_move = true;
-//                size_t carried_coins = playerManager.players[which_player].carried;
-//                playerManager.players[which_player].carried = 0;
-//                pthread_mutex_unlock(&mutex_player_manag);
-//                player_respawn_killed_player_internal(map,old_loc);
-//
-//                player_dropped_coin_spawn(map, old_loc, carried_coins);
-//                return 0;
-//            }
-//        }
-//
-//        //just moving to one of the tiles
-//
-//        int which_tile = rand() % tile_cnt;
-//
-//        beast->point_display_entity = ENTITY_FREE;
-//
-//        int tile_x = acceptable_tiles[which_tile].point.x;
-//        int tile_y = acceptable_tiles[which_tile].point.y;
-//        beast_tracker->beasts[beast_tracker_index] = &map[ tile_y * MAP_WIDTH + tile_x];
-//        beast_tracker->beasts[beast_tracker_index]->point_display_entity = ENTITY_BEAST;
-//
-//        return 0;
-//    }
+    int p_x = -1;
+    int p_y = -1;
+    for(int i = -2; i <= 2; i++)
+    {
+        if ((int) b_y + i >= 0 && (int) b_y + i < MAP_WIDTH) {
+            for (int j = -2; j <= 2; j++) {
+                if ((int) b_x + j >= 0 && (int) b_x + j < MAP_LENGTH)
+                {
+                    if(map[ (b_y + i) * MAP_WIDTH + b_x + j].point_display_entity >= ENTITY_PLAYER_1 &&
+                       map[ (b_y + i) * MAP_WIDTH + b_x + j].point_display_entity <= ENTITY_PLAYER_4)
+                    {
+                        player_found = true;
+                        p_x = b_x + j;
+                        p_y = b_y + i;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    //BEAST FOUND PLAYER, CHASING PLAYER
+    //BEAST RANDOMLY CHOOSES A TILE WHICH DECREASES ITS DISTANCE TO THE PLAYER
+    if(player_found)
+    {
+        int tile_cnt = 0;
+        map_point_t acceptable_tiles[2];
+        int curr_distance = abs(b_x - p_x) + abs(b_y - p_y);
+
+        for(int i = -1; i <= 1; i++)
+        {
+            if ((int) b_y + i >= 0 && (int) b_y + i < MAP_WIDTH) {
+                for (int j = -1; j <= 1; j++) {
+                    if ((int) b_x + j >= 0 && (int) b_x + j < MAP_LENGTH)
+                    {
+                        if( (i == -1 && j == 0) || (i == 1 && j == 0) || (i == 0 && j == -1) || (i == 0 && j == 1)  )
+                        {
+                            if (abs(b_x + j - p_x) + abs(b_y + i - p_y) < curr_distance &&
+                            (  map[(b_y + i) * MAP_WIDTH + b_x + j].point_display_entity == ENTITY_FREE
+                            || is_player(map[(b_y + i) * MAP_WIDTH + b_x + j]) ) )
+                            {
+                                acceptable_tiles[tile_cnt] = map[(b_y + i) * MAP_WIDTH + b_x + j];
+                                tile_cnt++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for(int i = 0; i < tile_cnt; i++)
+        {
+            if(is_player(acceptable_tiles[i]) )
+            {
+                //finding player and then killing him and making him respawn in a different place
+                int which_player;
+                pthread_mutex_lock(&mutex_player_manag);
+                point_t old_loc;
+                for(int j = 0; j < playerManager.cur_size; j++)
+                {
+                    if(playerManager.players[j].curr_location.x == acceptable_tiles[i].point.x &&
+                       playerManager.players[j].curr_location.y == acceptable_tiles[i].point.y)
+                    {
+                        which_player = j;
+                        old_loc = playerManager.players[i].curr_location;
+                    }
+                }
+                playerManager.players[which_player].has_received_move = true;
+                size_t carried_coins = playerManager.players[which_player].carried;
+                playerManager.players[which_player].carried = 0;
+                pthread_mutex_unlock(&mutex_player_manag);
+                player_respawn_killed_player_internal(map,old_loc);
+
+                player_dropped_coin_spawn(map, old_loc, carried_coins);
+                return 0;
+            }
+        }
+
+        //just moving to one of the tiles
+
+        int which_tile = rand() % tile_cnt;
+
+        beast->point_display_entity = ENTITY_FREE;
+
+        int tile_x = acceptable_tiles[which_tile].point.x;
+        int tile_y = acceptable_tiles[which_tile].point.y;
+        beast_tracker->beasts[beast_tracker_index] = &map[ tile_y * MAP_WIDTH + tile_x];
+        beast_tracker->beasts[beast_tracker_index]->point_display_entity = ENTITY_BEAST;
+
+        return 0;
+    }
     //RANDOM MOVEMENT FOR THE BEAST IF IT DIDNT FIND THE PLAYER
     map_point_t * possible_locs[4];
     for(int i = -1; i < 2; i++)
@@ -1054,10 +1365,10 @@ int beast_move( map_point_t map[],  beast_tracker_t * beast_tracker, map_point_t
         return 0;
 
     int which_loc = rand() % locs_cnt;
-//    possible_locs[which_loc]->point_display_entity = ENTITY_BEAST;
-//    beast->point_display_entity = ENTITY_FREE;
-//
-//    beast_tracker->beasts[beast_tracker_index] = possible_locs[which_loc];
+    possible_locs[which_loc]->point_display_entity = ENTITY_BEAST;
+    beast->point_display_entity = ENTITY_FREE;
+
+    beast_tracker->beasts[beast_tracker_index] = possible_locs[which_loc];
     return 0;
 }
 
