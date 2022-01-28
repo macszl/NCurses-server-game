@@ -12,6 +12,7 @@
   int retval = (x); \
   if (retval == -1) { \
     fprintf(stderr, "Runtime error: %s returned %d at %s:%d", #x, retval, __FILE__, __LINE__); \
+    fprintf(stderr, "Errno output: %s", strerror(errno)); \
     goto y;\
   } \
 } while (0)
@@ -34,12 +35,23 @@ int main() {
 
     int input = NO_INPUT;
     sem_init(&input_done_processing_blockade, 0 ,0);
-    //sem_init(&input_started_processing_blockade, 0 ,0);
     pthread_t thread1;
     pthread_create(&thread1, NULL, input_routine, &input);
+    int fd_write, fd_read;
+    fd_write = open("fifo_p_to_s_init", O_WRONLY);
+    fd_read = open("fifo_s_to_p_init", O_RDONLY);
+//    SELECT STUFF
+//    INITIALIZING THE STRUCTS NEEDED FOR SELECT
+    fd_set write_set;
+    FD_ZERO(&write_set);
+    FD_SET(fd_write, &write_set);
+//    INITIALIZING THE STRUCT THATS NEEDED TO TRACK THE TIME
+    struct timeval time_struct;
+    time_struct.tv_sec = 10;
+    time_struct.tv_usec = 0;
 
-    int fd_write = open("fifo_p_to_s_init", O_WRONLY);
-    int fd_read = open("fifo_s_to_p_init", O_RDONLY);
+
+
     CHECK (write(fd_write, &pid, sizeof(int)) , error0);
 
     int response;
@@ -103,7 +115,7 @@ int main() {
 
     int stat_window_start_x = map_length + 8, stat_window_start_y = 0;
 
-    WINDOW * stats_window = newwin(10, 50, stat_window_start_y, stat_window_start_x);
+    WINDOW * stats_window = newwin(11, 70, stat_window_start_y, stat_window_start_x);
     WINDOW * game_window = newwin(map_width + 1, map_length + 1,0,0);
 
     refresh();
@@ -124,7 +136,8 @@ int main() {
         CHECK (render_map(map, game_window, map_width, map_length), error1 );
         wrefresh(game_window);
 
-        CHECK( stat_window_display_player(stats_window, serv_process_id, turn_counter, stats.carried, stats.brought, deaths), error1 );
+        CHECK( stat_window_display_player(stats_window, serv_process_id, temp.player_num, player.player_loc,
+                                          turn_counter, stats.carried, stats.brought, deaths, CPU_MODE), error1 );
         wrefresh(stats_window);
 
         //sem_wait(&input_started_processing_blockade);
@@ -469,17 +482,22 @@ int server_receive_serverside_stats(stats_t * stats_p, int fd_read, int * deaths
 {
 
     int buf;
-    if (read(fd_read, &buf, sizeof(int) )!= sizeof(int)) {
+    int err;
+    err = read(fd_read, &buf, sizeof(int));
+    if ( err != sizeof(int)) {
+        fprintf(stderr, "Errno output: %s", strerror(errno));
         return -1;
     }
     stats_p->brought = buf;
 
-    if (read(fd_read, &buf, sizeof(int) ) != sizeof(int)) {
+    err = read(fd_read, &buf, sizeof(int));
+    if (err != sizeof(int)) {
         return -1;
     }
     stats_p->carried = buf;
 
-    if (read(fd_read, &buf, sizeof(int) ) != sizeof(int)) {
+    err = read(fd_read, &buf, sizeof(int));
+    if (err != sizeof(int)) {
         return -1;
     }
     *deaths = buf;
@@ -512,6 +530,11 @@ int server_send_move(player_t * player_before_move, player_t * player_after_move
     temp_pafter.y = player_after_move->player_loc.y;
     temp_pafter.x = player_after_move->player_loc.x;
     if (write(fd_write, &temp_pafter, sizeof(point_t)) != sizeof(point_t)) {
+        return -1;
+    }
+
+    bool is_player_type_cpu = CPU_MODE;
+    if (write(fd_write, &is_player_type_cpu, sizeof(bool)) != sizeof(bool)) {
         return -1;
     }
     return 0;

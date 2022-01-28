@@ -4,7 +4,7 @@
 
 #include "map.h"
 #include <stdio.h>
-
+#include <string.h>
 
 struct entity_ncurses_attributes_t attribute_list[] =
         {
@@ -112,15 +112,26 @@ void attribute_list_init()
     }
 }
 
-int stat_window_display_player(WINDOW * window, int pid ,int turn_counter, int carried, int brought, int deaths)
+int stat_window_display_player(WINDOW * window, int pid , int which_p, point_t loc, int turn_counter, int carried, int brought, int deaths, bool is_cpu)
 {
     if( pid < 0 || turn_counter < 0 || carried < 0 || brought < 0)
         return -1;
-    mvwprintw(window, 1, 1, "Server process ID: %d", pid);
-    mvwprintw(window, 2, 1, "Turn: %d", turn_counter);
-    mvwprintw(window, 3, 1, "Carried: %d", carried);
-    mvwprintw(window, 4, 1, "Brought: %d", brought);
-    mvwprintw(window, 5, 1, "Deaths: %d", deaths);
+    mvwprintw(window, 1, 1, "Turn: %d", turn_counter);
+    mvwprintw(window, 2, 1, "Server process ID: %5d", pid);
+    mvwprintw(window, 3, 1, "Player num: %d", which_p + 1);
+    if(is_cpu == false)
+        mvwprintw(window, 5, 1, "Player type: HUM");
+    else
+        mvwprintw(window, 5, 1, "Player type: CPU");
+
+    mvwprintw(window, 6, 1, "X/Y:");
+    mvwprintw(window, 6, 1 + 6 + strlen("X/Y: "), "%02d/%02d", loc.x, loc.y);
+    mvwprintw(window, 7, 1, "Deaths: ");
+    mvwprintw(window, 7, 1 + 5 + strlen("Deaths: "), "%3d", deaths);
+    mvwprintw(window, 8, 1, "Carried:");
+    mvwprintw(window, 8, 1 + 1 + strlen("Carried:"), "%7d", carried);
+    mvwprintw(window, 9, 1, "Brought:");
+    mvwprintw(window, 9, 1 + 1 + strlen("Brought:"), "%7d", brought);
     return 0;
 }
 

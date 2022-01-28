@@ -45,6 +45,7 @@ typedef struct server_info_t
     int player_num;
     int process_id;
     bool is_free;
+    bool is_cpu;
     bool is_currently_in_a_bush;
     bool can_escape_bush;
     int carried;
