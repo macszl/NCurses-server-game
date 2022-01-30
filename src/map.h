@@ -60,7 +60,10 @@ void ncurses_funcs_init();
 void attribute_list_init();
 int render_map(map_point_t map[], WINDOW * window, int MAP_WIDTH, int MAP_LENGTH);
 int stat_window_display_player(WINDOW * window, int pid , int which_p, point_t loc, int turn_counter, int carried, int brought, int deaths, bool is_cpu);
-int map_validate_server(map_point_t map[], map_point_t new_map[], const int MAP_WIDTH, const int MAP_LENGTH);
+//int map_validate_server(map_point_t map[], map_point_t new_map[], const int MAP_WIDTH, const int MAP_LENGTH);
+
+int command_helper_window_player(WINDOW * window);
+int command_helper_window_server(WINDOW * window);
 bool is_coin(map_point_t mapPoint);
 bool is_beast(map_point_t mapPoint);
 bool is_player(map_point_t mapPoint);

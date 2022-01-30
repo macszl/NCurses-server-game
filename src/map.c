@@ -117,7 +117,7 @@ int stat_window_display_player(WINDOW * window, int pid , int which_p, point_t l
     if( pid < 0 || turn_counter < 0 || carried < 0 || brought < 0)
         return -1;
     mvwprintw(window, 1, 1, "Turn: %d", turn_counter);
-    mvwprintw(window, 2, 1, "Server process ID: %5d", pid);
+    mvwprintw(window, 2, 1, "Server process ID: %7d", pid);
     mvwprintw(window, 3, 1, "Player num: %d", which_p + 1);
     if(is_cpu == false)
         mvwprintw(window, 5, 1, "Player type: HUM");
@@ -150,7 +150,22 @@ int map_validate_server(map_point_t map[], map_point_t new_map[], const int MAP_
     }
     return 0;
 }
-
+int command_helper_window_player(WINDOW * window)
+{
+    mvwprintw(window, 1, 1, "Hotkeys:");
+    mvwprintw(window, 2, 1, "a/A to switch between CPU mode and HUMAN mode");
+    mvwprintw(window, 3, 1, "q/q to quit the game");
+    return 0;
+}
+int command_helper_window_server(WINDOW * window)
+{
+    mvwprintw(window, 1, 1, "Hotkeys:");
+    mvwprintw(window, 2, 1, "b/B to spawn a beast");
+    mvwprintw(window, 3, 1, "c to spawn a small coin, C to spawn a large coin, T to spawn treasure");
+    mvwprintw(window, 4, 1, "q/q to quit the server");
+    mvwprintw(window, 5, 1, " ");
+    return 0;
+}
 bool is_coin(map_point_t mapPoint)
 {
     if(mapPoint.point_display_entity >= ENTITY_COIN_SMALL)

@@ -104,9 +104,11 @@ int main() {
     player_t new_player = { .player_loc = player.player_loc, .spawn_loc = player.spawn_loc, .which_player = player.which_player};
 
     int stat_window_start_x = map_length + 8, stat_window_start_y = 0;
-
+    int command_window_start_x = stat_window_start_x;
+    int command_window_start_y = stat_window_start_y + map_width / 2;
     WINDOW * stats_window = newwin(11, 70, stat_window_start_y, stat_window_start_x);
     WINDOW * game_window = newwin(map_width + 1, map_length + 1,0,0);
+    WINDOW * command_window = newwin(map_width / 2, 70, command_window_start_y, command_window_start_x);
 
     refresh();
     box(game_window, 0, 0);
@@ -129,7 +131,8 @@ int main() {
         CHECK( stat_window_display_player(stats_window, serv_process_id, temp.player_num, player.player_loc,
                                           turn_counter, stats.carried, stats.brought, deaths, CPU_MODE), error1 );
         wrefresh(stats_window);
-
+        command_helper_window_player(command_window);
+        wrefresh(command_window);
         //sem_wait(&input_started_processing_blockade);
         pthread_mutex_lock(&mutex_input);
         if(input == (int) 'q' || input == (int) 'Q')

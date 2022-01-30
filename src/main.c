@@ -36,6 +36,9 @@ const int MAP_WIDTH = 32;
 const int MAP_LENGTH = 32;
 const int STAT_WINDOW_START_Y = 0;
 const int STAT_WINDOW_START_X = 40;
+
+const int COMMAND_WINDOW_START_X = 40;
+const int COMMAND_WINDOW_START_Y = 17;
 extern struct entity_ncurses_attributes_t attribute_list[];
 
 //STRUCTS NEEDED FOR THE MANAGAMENT OF COINS AND BEASTS
@@ -217,7 +220,7 @@ int main() {
 
     WINDOW * stats_window = newwin(11, 70, STAT_WINDOW_START_Y, STAT_WINDOW_START_X);
     WINDOW * game_window = newwin(MAP_WIDTH + 1, MAP_LENGTH + 1,0,0);
-
+    WINDOW * command_window = newwin(MAP_WIDTH / 2, 70, COMMAND_WINDOW_START_Y, COMMAND_WINDOW_START_X);
     signal(SIGPIPE, SIG_IGN);
 
     refresh();
@@ -303,9 +306,10 @@ int main() {
         }
         render_map(map, game_window, MAP_WIDTH, MAP_LENGTH);
         stat_window_display_server(stats_window, server_pid, turn_counter);
-
+        command_helper_window_server(command_window);
         wrefresh(game_window);
         wrefresh(stats_window);
+        wrefresh(command_window);
         turn_counter++;
         for(int i = 0; i < 4; i++)
         {
@@ -1395,7 +1399,7 @@ void stat_window_display_server(WINDOW * window, int pid, int turn_cnt)
         {
             pthread_mutex_lock(&mutex_player_manag);
             mvwprintw(window, 3, 1 + 14 + 12 * (i + 1), "%d",i + 1);
-            mvwprintw(window, 4, 1 + 10 + 12 * (i + 1), "%5d", playerManager.players[i].process_id);
+            mvwprintw(window, 4, 1 + 8 + 12 * (i + 1), "%7d", playerManager.players[i].process_id);
             if(playerManager.players[i].is_cpu)
                 mvwprintw(window, 5,1 + 12 + 12 * (i + 1), "CPU");
             else
