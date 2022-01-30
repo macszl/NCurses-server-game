@@ -40,16 +40,6 @@ int main() {
     int fd_write, fd_read;
     fd_write = open("fifo_p_to_s_init", O_WRONLY);
     fd_read = open("fifo_s_to_p_init", O_RDONLY);
-//    SELECT STUFF
-//    INITIALIZING THE STRUCTS NEEDED FOR SELECT
-    fd_set write_set;
-    FD_ZERO(&write_set);
-    FD_SET(fd_write, &write_set);
-//    INITIALIZING THE STRUCT THATS NEEDED TO TRACK THE TIME
-    struct timeval time_struct;
-    time_struct.tv_sec = 10;
-    time_struct.tv_usec = 0;
-
 
 
     CHECK (write(fd_write, &pid, sizeof(int)) , error0);

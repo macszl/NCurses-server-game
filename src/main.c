@@ -17,17 +17,6 @@
 #include "fifohelper.h"
 
 
-//TODO: CELE PROJEKTOWE:
-
-// serwer powinnien odpowiadać za:
-//0. inicjalizacje, załadowanie(bądź generowanie) planszy
-//1. do serwera powinna docierac kazda operacja na mapie poprzez interakcje międzyprocesowe(przesylanie informacji poprzez FIFO)
-//2. spawnowanie nowych agentów, istot, rzeczy na mapie
-//3. zdefiniowanie autonomicznego zachowania bestii, każda bestia na nowym wątku
-//4. wywoływanie procesów graczy
-
-
-//TODO MAKE IT SO THAT LEAVING DOESNT CRASH THE SERVER
 #define COIN_SPAWNER_NUM 40
 #define BEAST_SPAWNER_NUM 20
 #define DEBUG 0
@@ -128,20 +117,14 @@ void spawn_coin(entity_t coin_size, map_point_t map[]);
 int coin_spawn_init(map_point_t map[]);
 
 //BEAST STUFF
-int spawn_beast(beast_tracker_t * beast_tracker);
 int beast_spawn_init(map_point_t map[]);
-int beast_move(map_point_t map[], beast_tracker_t * beast_tracker, map_point_t * beast);
-int handle_beasts(map_point_t map[], beast_tracker_t * beast_tracker);
-//TODO MULTITHREADED BEAST STUFF
-
-//something that tracks the beasts on the map - perhaps use the old beast_tracker struct?
-
-//something that tracks the spawners on the map - perhaps use the old beast_spawn_manager struct?
+//*** INITIALIZER FUNCTION
 
 int mt_beast_manager_init();
 //*** SETTING THE SIZE TO 0(EMPTY ARRAY, NO BEASTS ON THE MAP)
 //*** ALSO CALLING SEM_INIT ON EVERY SEMAPHORE IN THE CONTROL STRUCT
-
+int mt_beast_manager_destroy();
+//*** DESTROYING THE SEMAPHORES
 int mt_beast_spawn(beast_move_params_t * params);
 //*** THE SPAWN_BEAST_MULTITHREADED FUNCTION SHOULD CONTAIN A PTHREAD_CREATE.
 //*** IT SHOULD FAIL THE CALL AND RETURN AN ERROR IF THE THREAD LIMIT / BEAST LIMIT IS REACHED.
@@ -153,7 +136,7 @@ void mt_beast_release_all();
 point_t mt_beast_player_find_internal(map_point_t * map, int b_y, int b_x);
 void mt_beast_choose_tiles_internal(point_t beast_loc, point_t player_loc, map_point_t * map,
                                     int * tile_cnt, int curr_distance, map_point_t * acceptable_tiles);
-//UTILIY FUNCTIONS FOR BEAST_MOVE
+//***UTILIY FUNCTIONS FOR BEAST_MOVE
 
 
 
@@ -181,10 +164,10 @@ void *listening_disconnect_routine(void * param);
 
 void* mt_beast_move_routine(void * params);
 //*** THE FUNCTION THAT MOVES THE BEAST. SAME RULES AS THE SINGLETHREADED BEAST.
-//*** THE SHOULD BE DONE SEQUENTIALLY. EACH AND EVERY ONE SHOULD MOVE ONLY ONCE, DURING A GIVEN TURN.
+//*** BEASTS MOVE SEQUENTIALLY. EACH AND EVERY ONE SHOULD MOVE ONLY ONCE, DURING A GIVEN TURN.
 //*** EXAMPLE: BEAST1 moves, then gets blocked, BEAST2 moves, then gets blocked, BEAST 3 moves, then gets blocked,
-//*** All the beasts are blocked, awaiting on signal that releases them from the main thread
-//*** SHOULD CONSIST OF AN INFINITE WHILE LOOP AND BREAKS THAT TERMINATE THE LOOP.
+//*** All the beasts are blocked, awaiting on signal that releases them from the main thread (the release_all function)
+//*** CONSISTS OF AN INFINITE WHILE LOOP AND BREAKS THAT TERMINATE THE LOOP.
 
 coin_spawn_manager_t coinSpawnManager;
 beast_spawn_manager_t beastSpawnManager;
@@ -192,15 +175,16 @@ player_manager_t playerManager;
 dropped_coin_manager_t droppedCoinManager;
 mt_beast_manager_t mtBeastManager;
 
-pthread_mutex_t mutex_input = PTHREAD_MUTEX_INITIALIZER;
-sem_t input_found_blockade;
+pthread_mutex_t input_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mutex_player_manag = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t beast_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t beast_done_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t  beast_done_cond = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t beast_thread_count_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-int threads_working = 0;
+pthread_cond_t  beast_done_cond = PTHREAD_COND_INITIALIZER;
+
+sem_t input_found_blockade;
+int beast_threads_working = 0;
 bool user_did_not_quit = true;
 bool listening_join_routine_not_terminated = true;
 bool disconnect_routine_not_terminated = true;
@@ -252,30 +236,31 @@ int main() {
     pthread_create(&thread2, NULL, listening_join_routine, map);
     pthread_t thread3;
     pthread_create(&thread3, NULL, listening_disconnect_routine, NULL);
+
     // loop
 
     int turn_counter = 0;
     while(1)
     {
         beast_move_params_t params = {.beast_tracker = &beast_tracker, .map = map};
-        pthread_mutex_lock(&mutex_input);
+        pthread_mutex_lock(&input_mutex);
         if(input == (int) 'q')
         {
             sem_post(&input_found_blockade);
             break;
         }
-        pthread_mutex_unlock(&mutex_input);
+        pthread_mutex_unlock(&input_mutex);
 
-        pthread_mutex_lock(&mutex_input);
+        pthread_mutex_lock(&input_mutex);
         if(input != NO_INPUT)
         {
             handle_event(input, map, &params);
-            pthread_mutex_unlock(&mutex_input);
+            pthread_mutex_unlock(&input_mutex);
             sem_post(&input_found_blockade);
         }
         else
         {
-            pthread_mutex_unlock(&mutex_input);
+            pthread_mutex_unlock(&input_mutex);
         }
 
         // RELEASING THE SEMAPHORE LOCKS IN EACH BEAST THREAD SO THAT THE BEASTS MIGHT BEGIN WORKING
@@ -283,7 +268,7 @@ int main() {
 
         // THIS COND_WAIT BLOCKS THE MAIN THREAD UNTIL ALL THE BEASTS ARE DONE WORKING.
         pthread_mutex_lock(&beast_thread_count_mutex);
-        while(threads_working != 0)
+        while(beast_threads_working != 0)
         {
             pthread_cond_wait(&beast_done_cond, &beast_thread_count_mutex);
         }
@@ -297,27 +282,19 @@ int main() {
                 player_send_serverside_stats(i, playerManager.players[i].carried, playerManager.players[i].brought,
                                              playerManager.players[i].deaths);
 
-                if(map_validate_server(basic_map_for_validation, map, MAP_WIDTH, MAP_LENGTH) == -1) {
-                    return -1;
-                }
+                //Erasing a player if SIGPIPE happens
                 int error_erase = erase_player_if_error(map, i);
                 if(error_erase == -1)
                     continue;
 
                 player_send_map_update(map, i, playerManager.players[i].curr_location);
 
-                if(map_validate_server(basic_map_for_validation, map, MAP_WIDTH, MAP_LENGTH) == -1) {
-                    return -1;
-                }
                 error_erase = erase_player_if_error(map, i);
                 if(error_erase == -1)
                     continue;
 
                 player_receive_move(map, i, MAP_WIDTH);
 
-                if(map_validate_server(basic_map_for_validation, map, MAP_WIDTH, MAP_LENGTH) == -1) {
-                    return -1;
-                }
                 error_erase = erase_player_if_error(map, i);
                 if(error_erase == -1)
                     continue;
@@ -345,18 +322,19 @@ int main() {
     listening_join_routine_not_terminated = false;
     disconnect_routine_not_terminated = false;
     err = unlink_fifos();
-    if(err == -1) printf("%s\n", strerror(errno));
+    if(err == -1) fprintf(stderr,"%s\n", strerror(errno));
 
     pthread_join(thread2, NULL);
     pthread_join(thread3, NULL);
     pthread_join(thread1, NULL);
 
-    pthread_mutex_destroy(&mutex_input);
+    pthread_mutex_destroy(&input_mutex);
     pthread_mutex_destroy(&mutex_player_manag);
     pthread_mutex_destroy(&beast_mutex);
     pthread_mutex_destroy(&beast_done_mutex);
     pthread_cond_destroy(&beast_done_cond);
     sem_destroy(&input_found_blockade);
+    mt_beast_manager_destroy();
     return 0;
 }
 
@@ -408,17 +386,21 @@ void handle_event(int c, map_point_t map[], beast_move_params_t * params)
 
 void *input_routine(void *input_storage) {
     while (1) {
-        pthread_mutex_lock(&mutex_input);
+
+        pthread_mutex_lock(&input_mutex);
         *(int *) input_storage = NO_INPUT;
-        pthread_mutex_unlock(&mutex_input);
+        pthread_mutex_unlock(&input_mutex);
 
         char c = (char) getch();
         flushinp();
         if( c != NO_INPUT) {
-            pthread_mutex_lock(&mutex_input);
+
+            pthread_mutex_lock(&input_mutex);
             *(int *) input_storage = (int) c;
-            pthread_mutex_unlock(&mutex_input);
+            pthread_mutex_unlock(&input_mutex);
+
             sem_wait(&input_found_blockade);
+
             if ( c ==  'q' ) {
                 break;
             }else {
@@ -440,6 +422,7 @@ void *listening_join_routine(void * param)
         {
             fprintf(stderr, "Errno: %s\n", strerror(errno));
         }
+
         int fd_write = open("fifo_s_to_p_init", O_WRONLY | O_NONBLOCK);
         int player_pid;
 
@@ -448,27 +431,25 @@ void *listening_join_routine(void * param)
         fd_set read_set;
         FD_ZERO(&read_set);
         FD_SET(fd_read, &read_set);
-
+        //TIME INIT
         struct timeval time_struct;
         time_struct.tv_sec = 0;
         time_struct.tv_usec = 1050;
 
-
+        //A CLIENT HAS BEEN FOUND
         if( fd_write != -1 && fd_read != -1 ) {
             ssize_t errs = 0;
+            //CHECKING THE RESULT OF THE SELECT FUNCTION, USED MOSTLY IN DEBUG
             if (select(fd_read + 1, &read_set, NULL, NULL, &time_struct) == -1) {
                 errs++;
             }
 
+            //READING FROM THE CLIENT IF SELECT FOUND ANYTHING
             if(FD_ISSET(fd_read, &read_set))
-            {
                 errs = read(fd_read, &player_pid, sizeof(int));
-            }
+
             pthread_mutex_lock(&mutex_player_manag);
             if (playerManager.cur_size < 4) {
-                pthread_mutex_unlock(&mutex_player_manag);
-
-                pthread_mutex_lock(&mutex_player_manag);
                 int acc_var = 123;
                 if( write(fd_write, &acc_var, sizeof(int) ) != sizeof(int ))
                 {   //for debug purposes
@@ -501,9 +482,10 @@ void *listening_join_routine(void * param)
                 player_send_spawn_internal(map, MAP_WIDTH, MAP_LENGTH, i);
                 pthread_mutex_unlock(&mutex_player_manag);
             } else {
-
+                //CONNECTION REQUEST REJECTED
                 pthread_mutex_unlock(&mutex_player_manag);
                 int rej_var = 234;
+                //SENDING OUT 234 AS A SIGNAL TO PLAYER THAT HE HAS BEEN REJECTED
                 if(write(fd_write, &rej_var, sizeof(int)) == sizeof(int ))
                 {   //for debug purposes
                     errs++;
@@ -547,7 +529,6 @@ void * listening_disconnect_routine(void * params)
 
 void * mt_beast_move_routine(void * params)
 {
-    // problems: the beast variable desynchronizes after a certain time
     beast_move_params_t * temp = (beast_move_params_t *) params;
 
     map_point_t * map = temp->map;
@@ -622,9 +603,11 @@ void * mt_beast_move_routine(void * params)
             }
 
             if(can_kill_player) {
-                //finding player and then killing him and making him respawn in a different place
+
                 int which_player;
+                //finding player
                 pthread_mutex_lock(&mutex_player_manag);
+
                 point_t old_loc;
                 bool p_found = false;
                 for (int j = 0; j < playerManager.cur_size; j++) {
@@ -636,22 +619,27 @@ void * mt_beast_move_routine(void * params)
                         break;
                     }
                 }
+
                 if(p_found != true)
                     return NULL;
+                //taking away all his coins
                 playerManager.players[which_player].has_received_move = true;
                 size_t carried_coins = playerManager.players[which_player].carried;
                 playerManager.players[which_player].carried = 0;
-                pthread_mutex_unlock(&mutex_player_manag);
-                player_respawn_killed_player_internal(map, old_loc);
 
+                pthread_mutex_unlock(&mutex_player_manag);
+                //respawning player
+                player_respawn_killed_player_internal(map, old_loc);
+                //making player coins a part of a DROPPED_COIN_ENTITY
                 player_dropped_coin_spawn(map, old_loc, carried_coins);
 
+                //decrementing the counter
                 pthread_mutex_lock(&beast_thread_count_mutex);
-                threads_working = threads_working - 1;
+                beast_threads_working = beast_threads_working - 1;
                 pthread_mutex_unlock(&beast_thread_count_mutex);
 
                 pthread_mutex_unlock(&beast_mutex);
-
+                //signalling main that 1 thread has finished working
                 pthread_cond_signal(&beast_done_cond);
                 sem_wait(beast_done_blockade);
                 continue;
@@ -670,7 +658,7 @@ void * mt_beast_move_routine(void * params)
             beast = beast_tracker->beasts[beast_tracker_index];
 
             pthread_mutex_lock(&beast_thread_count_mutex);
-            threads_working = threads_working - 1;
+            beast_threads_working = beast_threads_working - 1;
             pthread_mutex_unlock(&beast_thread_count_mutex);
             pthread_mutex_unlock(&beast_mutex);
 
@@ -704,7 +692,7 @@ void * mt_beast_move_routine(void * params)
             beast = beast_tracker->beasts[beast_tracker_index];
         }
         pthread_mutex_lock(&beast_thread_count_mutex);
-        threads_working = threads_working - 1;
+        beast_threads_working = beast_threads_working - 1;
         pthread_mutex_unlock(&beast_thread_count_mutex);
 
         pthread_mutex_unlock(&beast_mutex);
@@ -736,7 +724,7 @@ int mt_beast_spawn(beast_move_params_t * params)
     params->beast_done_blockade = &mtBeastManager.input_done_blockades[mtBeastManager.cur_size];
 
     pthread_mutex_lock(&beast_thread_count_mutex);
-    threads_working = mtBeastManager.cur_size + 1;
+    beast_threads_working = mtBeastManager.cur_size + 1;
     pthread_mutex_unlock(&beast_thread_count_mutex);
 
     int size = mtBeastManager.cur_size;
@@ -750,7 +738,7 @@ void mt_beast_release_all()
     //problems: ???
 
     pthread_mutex_lock(&beast_thread_count_mutex);
-    threads_working = mtBeastManager.cur_size;
+    beast_threads_working = mtBeastManager.cur_size;
     pthread_mutex_unlock(&beast_thread_count_mutex);
     for(int i = 0; i < mtBeastManager.cur_size; i++)
     {
@@ -772,6 +760,19 @@ int mt_beast_manager_init()
     {
         sem_init(&mtBeastManager.input_done_blockades[i], 0, 0);
         sem_init(&mtBeastManager.start_blockades[i], 0, 0);
+        mtBeastManager.start_blockade_passed[i] = false;
+    }
+    mtBeastManager.cur_size = 0;
+
+    return 0;
+}
+
+int mt_beast_manager_destroy()
+{
+    for(int i = 0; i < TOTAL_BEAST_LIMIT; i++)
+    {
+        sem_destroy(&mtBeastManager.input_done_blockades[i]);
+        sem_destroy(&mtBeastManager.start_blockades[i]);
         mtBeastManager.start_blockade_passed[i] = false;
     }
     mtBeastManager.cur_size = 0;
